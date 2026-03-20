@@ -29,6 +29,22 @@ subprojects {
     project.evaluationDependsOn(":app")
 }
 
+// Fix for old plugins (e.g. fl_location) that don't specify namespace
+subprojects {
+    afterEvaluate {
+        if (project.hasProperty("android")) {
+            val android = project.extensions.findByName("android")
+            if (android is com.android.build.gradle.BaseExtension) {
+                if (android.namespace.isNullOrEmpty()) {
+                    android.namespace = project.group.toString().ifEmpty {
+                        "com.example.${project.name.replace("-", "_")}"
+                    }
+                }
+            }
+        }
+    }
+}
+
 tasks.register("clean", Delete::class) {
     delete(rootProject.buildDir)
 }

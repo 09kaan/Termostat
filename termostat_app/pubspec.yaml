@@ -36,6 +36,7 @@ dependencies:
   cupertino_icons: ^1.0.2
   firebase_core: ^2.24.2
   firebase_database: ^10.3.8
+  firebase_auth: ^4.17.8
   provider: ^6.1.1
   shared_preferences: ^2.2.2
   geolocator: ^10.1.0

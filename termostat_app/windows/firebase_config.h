@@ -1,0 +1,12 @@
+#ifndef FIREBASE_CONFIG_H
+#define FIREBASE_CONFIG_H
+
+#define FIREBASE_API_KEY "AIzaSyCRF8ybnwi6aFkK82aHNXEo1rXf85bg38U"
+#define FIREBASE_PROJECT_ID "termometer-4b9d6"
+#define FIREBASE_MESSAGING_SENDER_ID "146412174490"
+#define FIREBASE_APP_ID "1:146412174490:web:93b2cdd4831b398898f323"
+#define FIREBASE_MEASUREMENT_ID "G-95C743TLS5"
+#define FIREBASE_AUTH_DOMAIN "termometer-4b9d6.firebaseapp.com"
+#define FIREBASE_STORAGE_BUCKET "termometer-4b9d6.firebasestorage.app"
+
+#endif // FIREBASE_CONFIG_H 

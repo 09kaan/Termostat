@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "146412174490",
+    "firebase_url": "https://termometer-4b9d6-default-rtdb.europe-west1.firebasedatabase.app",
+    "project_id": "termometer-4b9d6",
+    "storage_bucket": "termometer-4b9d6.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:146412174490:android:b54e67e59a4c20d498f323",
+        "android_client_info": {
+          "package_name": "com.example.termostat_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBFLngH8pAqR3-wEeuUHB85yj3eNSTyY84"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

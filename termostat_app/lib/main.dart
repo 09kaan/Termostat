@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:provider/provider.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'firebase_options.dart';
 import 'screens/home_screen.dart';
 import 'screens/schedule_list_screen.dart';
@@ -52,9 +51,6 @@ class MyApp extends StatelessWidget {
                 seedColor: Colors.blue,
                 brightness: Brightness.light,
               ),
-              textTheme: GoogleFonts.interTextTheme(
-                Theme.of(context).textTheme,
-              ),
             ),
             darkTheme: ThemeData(
                useMaterial3: true,
@@ -73,11 +69,9 @@ class MyApp extends StatelessWidget {
                  onError: Colors.white,
                  outline: Colors.grey[700],
                ),
-              textTheme: GoogleFonts.interTextTheme(
-                Theme.of(context).textTheme,
-              ).apply(
-                 bodyColor: Colors.white,
-                 displayColor: Colors.white,
+              textTheme: const TextTheme().apply(
+                   bodyColor: Colors.white,
+                   displayColor: Colors.white,
               ),
             ),
             themeMode: settings.theme == 'dark' ? ThemeMode.dark : ThemeMode.light,

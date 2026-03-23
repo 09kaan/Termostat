@@ -44,7 +44,7 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions web = FirebaseOptions(
-    apiKey: 'AIzaSyCRF8ybnwi6aFkK82aHNXEo1rXf85bg38U',
+    apiKey: 'AIzaSyCn7RN1-IL2qL4ZWqnlX8X8M_FJG2AJrvA',
     appId: '1:146412174490:web:93b2cdd4831b398898f323',
     messagingSenderId: '146412174490',
     projectId: 'termometer-4b9d6',
@@ -55,7 +55,7 @@ class DefaultFirebaseOptions {
   );
 
   static const FirebaseOptions windows = FirebaseOptions(
-    apiKey: 'AIzaSyCRF8ybnwi6aFkK82aHNXEo1rXf85bg38U',
+    apiKey: 'AIzaSyCn7RN1-IL2qL4ZWqnlX8X8M_FJG2AJrvA',
     appId: '1:146412174490:web:d5685d9189968e2f98f323',
     messagingSenderId: '146412174490',
     projectId: 'termometer-4b9d6',
@@ -66,7 +66,7 @@ class DefaultFirebaseOptions {
   );
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyBFLngH8pAqR3-wEeuUHB85yj3eNSTyY84',
+    apiKey: 'AIzaSyCn7RN1-IL2qL4ZWqnlX8X8M_FJG2AJrvA',
     appId: '1:146412174490:android:b54e67e59a4c20d498f323',
     messagingSenderId: '146412174490',
     projectId: 'termometer-4b9d6',
@@ -75,7 +75,7 @@ class DefaultFirebaseOptions {
   );
 
   static const FirebaseOptions ios = FirebaseOptions(
-    apiKey: 'AIzaSyDqaqVa_2VJ9tzJ5qK9lKU1RXwdrAIufXs',
+    apiKey: 'AIzaSyCn7RN1-IL2qL4ZWqnlX8X8M_FJG2AJrvA',
     appId: '1:146412174490:ios:ed6799eaf94672ed98f323',
     messagingSenderId: '146412174490',
     projectId: 'termometer-4b9d6',

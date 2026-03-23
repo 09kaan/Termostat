@@ -15,7 +15,7 @@ class WeatherProvider with ChangeNotifier {
   bool get isLoading => _isLoading;
   String? get error => _error;
 
-  WeatherProvider() : _wf = WeatherFactory('YOUR_OPENWEATHERMAP_API_KEY', language: Language.ENGLISH) {
+  WeatherProvider() : _wf = WeatherFactory('b651e31ee2e0cd1e62be2bbd9c2f999c', language: Language.ENGLISH) {
     // Optionally fetch weather data when the provider is created
     fetchWeatherForCurrentLocation();
   }

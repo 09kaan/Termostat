@@ -4,7 +4,7 @@ import 'package:weather/weather.dart';
 
 class WeatherProvider with ChangeNotifier {
   // !!! IMPORTANT: Replace with your actual weather API key !!!
-  final String _apiKey = 'b651e31ee2e0cd1e62be2bbd9c2f999c'; 
+  final String _apiKey = 'YOUR_OPENWEATHERMAP_API_KEY'; // Get from https://openweathermap.org/api
   final WeatherFactory _wf;
 
   Weather? _weatherData;
@@ -15,7 +15,7 @@ class WeatherProvider with ChangeNotifier {
   bool get isLoading => _isLoading;
   String? get error => _error;
 
-  WeatherProvider() : _wf = WeatherFactory('b651e31ee2e0cd1e62be2bbd9c2f999c', language: Language.ENGLISH) { // !!! IMPORTANT: Replace with your actual weather API key here too !!!
+  WeatherProvider() : _wf = WeatherFactory('YOUR_OPENWEATHERMAP_API_KEY', language: Language.ENGLISH) {
     // Optionally fetch weather data when the provider is created
     fetchWeatherForCurrentLocation();
   }

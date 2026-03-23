@@ -4,12 +4,12 @@
 #include <DallasTemperature.h>
 
 // WiFi credentials
-#define WIFI_SSID "Xiaomi_8CEA"
-#define WIFI_PASSWORD "kaandurukan09"
+#define WIFI_SSID "YOUR_WIFI_SSID"
+#define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
 
 // Firebase credentials
 #define FIREBASE_HOST "termometer-4b9d6-default-rtdb.europe-west1.firebasedatabase.app/"
-#define FIREBASE_AUTH "zHPpeMbreSIUSFwGaR5y9bxv7Tc5FHdW4IDj2ql1"
+#define FIREBASE_AUTH "YOUR_FIREBASE_DATABASE_SECRET"
 
 // Pin definitions
 #define ONE_WIRE_BUS D2      // DS18B20 data pin

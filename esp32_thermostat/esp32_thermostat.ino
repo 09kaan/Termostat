@@ -506,6 +506,12 @@ void setup() {
 }
 
 void loop() {
+  // WiFi kopmuşsa otomatik yeniden bağlan
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[WiFi] Bağlantı koptu, yeniden bağlanılıyor...");
+    wifiConnect();
+  }
+
   timeClient.update();
 
   int hourNow = timeClient.getHours();

@@ -66,14 +66,14 @@ void setup() {
 void loop() {
   unsigned long now = millis();
 
-  // Read Firebase settings every 10 seconds
-  if (now - lastFirebaseRead > 10000) {
+  // Read Firebase settings every 60 seconds (settings change rarely)
+  if (now - lastFirebaseRead > 60000) {
     readFirebaseSettings();
     lastFirebaseRead = now;
   }
 
-  // Read temperature and upload every 10 seconds
-  if (now - lastTempUpload > 10000) {
+  // Read temperature and upload every 30 seconds
+  if (now - lastTempUpload > 30000) {
     float temp = readTemperature();
     uploadTemperature(temp);
     controlRelay(temp);

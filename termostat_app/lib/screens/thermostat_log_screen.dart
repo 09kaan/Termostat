@@ -282,10 +282,6 @@ class _ThermostatLogScreenState extends State<ThermostatLogScreen> {
       return Center(child: Text('Error: ${_error!}'));
     }
 
-    if (_dailyLogSummaries.isEmpty) {
-      return const Center(child: Text('No log data available.'));
-    }
-
     // Filter log entries for the selected week (inclusive of start, exclusive of end + 1 day)
     final DateTime startOfNextWeek =
         _selectedWeekStart.add(const Duration(days: 7));

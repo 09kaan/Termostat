@@ -15,6 +15,7 @@ class SettingsProvider extends ChangeNotifier {
   double _homeLatitude = AppConstants.defaultHomeLatitude;
   double _homeLongitude = AppConstants.defaultHomeLongitude;
   double _homeRadiusMeters = AppConstants.defaultHomeRadiusMeters;
+  bool _geofenceEnabled = true;
 
   SettingsProvider() {
     _loadSettings();
@@ -28,6 +29,7 @@ class SettingsProvider extends ChangeNotifier {
   double get homeLatitude => _homeLatitude;
   double get homeLongitude => _homeLongitude;
   double get homeRadiusMeters => _homeRadiusMeters;
+  bool get geofenceEnabled => _geofenceEnabled;
 
   Future<void> _loadSettings() async {
     _isLoading = true;
@@ -44,6 +46,7 @@ class SettingsProvider extends ChangeNotifier {
       _homeLatitude = prefs.getDouble('homeLatitude') ?? AppConstants.defaultHomeLatitude;
       _homeLongitude = prefs.getDouble('homeLongitude') ?? AppConstants.defaultHomeLongitude;
       _homeRadiusMeters = prefs.getDouble('homeRadiusMeters') ?? AppConstants.defaultHomeRadiusMeters;
+      _geofenceEnabled = prefs.getBool('geofenceEnabled') ?? true;
     } catch (e) {
       _error = e.toString();
     } finally {
@@ -96,4 +99,11 @@ class SettingsProvider extends ChangeNotifier {
     await prefs.setDouble('homeRadiusMeters', radiusMeters);
     notifyListeners();
   }
-} 
+
+  Future<void> setGeofenceEnabled(bool enabled) async {
+    _geofenceEnabled = enabled;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('geofenceEnabled', enabled);
+    notifyListeners();
+  }
+}

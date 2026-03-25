@@ -120,6 +120,16 @@ class SettingsScreen extends StatelessWidget {
                 ),
               ),
               ListTile(
+                title: const Text('GPS Geofence'),
+                subtitle: Text(settings.geofenceEnabled ? 'Aktif — konum takibi açık' : 'Kapalı'),
+                trailing: Switch(
+                  value: settings.geofenceEnabled,
+                  onChanged: (isOn) {
+                    settings.setGeofenceEnabled(isOn);
+                  },
+                ),
+              ),
+              ListTile(
                 title: const Text('Home Location'),
                 subtitle: Text(
                   '${settings.homeLatitude.toStringAsFixed(6)}, ${settings.homeLongitude.toStringAsFixed(6)}',

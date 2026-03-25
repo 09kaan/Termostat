@@ -52,14 +52,22 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _startGeofence() async {
+    final settings = Provider.of<SettingsProvider>(context, listen: false);
     await _geofenceService.initialize(context);
-    await _geofenceService.start(context);
+    if (settings.geofenceEnabled) {
+      await _geofenceService.start(context);
+    }
     await _deepLinkService.initialize(context);
   }
 
   void _onSettingsChanged() {
-    // Update geofence when settings change
-    if (mounted) {
+    if (!mounted) return;
+    final settings = Provider.of<SettingsProvider>(context, listen: false);
+    if (settings.geofenceEnabled && !_geofenceService.isRunning) {
+      _geofenceService.start(context);
+    } else if (!settings.geofenceEnabled && _geofenceService.isRunning) {
+      _geofenceService.stop();
+    } else {
       _geofenceService.updateGeofence(context);
     }
   }

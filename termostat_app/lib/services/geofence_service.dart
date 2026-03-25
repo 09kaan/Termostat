@@ -94,7 +94,7 @@ class ThermostatGeofenceService {
           activityType: ActivityType.automotiveNavigation,
           distanceFilter: 50, // Only trigger when moved 50+ meters
           pauseLocationUpdatesAutomatically: false,
-          showBackgroundLocationIndicator: true, // Blue bar on iOS
+          showBackgroundLocationIndicator: false, // No blue bar
           allowBackgroundLocationUpdates: true,  // Critical for background
         ),
       ).listen(

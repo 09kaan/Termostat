@@ -13,6 +13,7 @@ import './schedule_list_screen.dart';
 import './thermostat_log_screen.dart';
 import '../services/geofence_service.dart';
 import '../services/deep_link_service.dart';
+import '../services/widget_service.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -46,6 +47,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final schedule = Provider.of<ScheduleProvider>(context, listen: false);
     await thermostat.initializeThermostat('device1');
     await thermostat.startListening();
+    await WidgetService.initialize();
     await schedule.loadSchedules();
     if (!mounted) return;
     schedule.startScheduleChecker(thermostat);

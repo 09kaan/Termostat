@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:firebase_database/firebase_database.dart';
 import '../models/thermostat.dart';
+import '../services/widget_service.dart';
 
 class ThermostatProvider with ChangeNotifier {
   final DatabaseReference _database = FirebaseDatabase.instance.ref();
@@ -87,6 +88,7 @@ class ThermostatProvider with ChangeNotifier {
         final data = Map<String, dynamic>.from(event.snapshot.value as Map);
         data['id'] = _thermostat!.id;
         _thermostat = Thermostat.fromJson(data);
+        _pushWidgetUpdate();
         notifyListeners();
       }
     });
@@ -95,4 +97,16 @@ class ThermostatProvider with ChangeNotifier {
   void stopListening() {
     // No-op for now
   }
-} 
+
+  /// Push current thermostat data to iOS home screen widget
+  void _pushWidgetUpdate() {
+    if (_thermostat == null) return;
+    WidgetService.updateWidget(
+      temperature: _thermostat!.currentTemperature,
+      humidity: _thermostat!.currentHumidity.toInt(),
+      isHeating: _thermostat!.isHeating,
+      mode: _thermostat!.mode,
+      targetTemp: _thermostat!.targetTemperature,
+    );
+  }
+}

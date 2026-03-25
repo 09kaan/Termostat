@@ -81,11 +81,8 @@ class ThermostatGeofenceService extends ChangeNotifier {
       // Do initial location check
       await _checkLocation();
 
-      // Check location every 3 minutes with a timer (backup)
-      _locationCheckTimer = Timer.periodic(
-        const Duration(seconds: 180),
-        (_) => _checkLocation(),
-      );
+      // Start adaptive timer (interval depends on distance)
+      _scheduleNextCheck();
 
       // Listen to location changes — works in foreground AND background on iOS
       // if "Location updates" background mode is enabled in Info.plist
@@ -113,6 +110,27 @@ class ThermostatGeofenceService extends ChangeNotifier {
       debugPrint('Failed to start geofence: $e');
       _isStarted = false;
     }
+  }
+
+  /// Get adaptive polling interval based on distance from home
+  int _getPollingIntervalSeconds() {
+    if (_lastDistance < 1000) return 60;       // < 1km → 60 sn
+    if (_lastDistance < 5000) return 180;      // 1-5km → 3 dk
+    return 300;                                // > 5km → 5 dk
+  }
+
+  /// Schedule next location check with adaptive interval
+  void _scheduleNextCheck() {
+    _locationCheckTimer?.cancel();
+    final interval = _getPollingIntervalSeconds();
+    _locationCheckTimer = Timer(
+      Duration(seconds: interval),
+      () {
+        _checkLocation();
+        _scheduleNextCheck(); // Reschedule with potentially new interval
+      },
+    );
+    debugPrint('⏱️ Next check in ${interval}s (distance: ${_lastDistance.toStringAsFixed(0)}m)');
   }
 
   /// Check current location against home
@@ -145,12 +163,19 @@ class ThermostatGeofenceService extends ChangeNotifier {
 
     final isInside = distance <= homeRadius;
 
+    // Update distance and reschedule if interval changed
+    final oldInterval = _getPollingIntervalSeconds();
     _lastDistance = distance;
     notifyListeners();
+    final newInterval = _getPollingIntervalSeconds();
+    if (oldInterval != newInterval && _isStarted) {
+      _scheduleNextCheck();
+    }
 
     debugPrint('📍 Geofence: distance=${distance.toStringAsFixed(0)}m, '
         'radius=${homeRadius}m, '
-        'inside=$isInside, wasInside=$_isInsideGeofence');
+        'inside=$isInside, wasInside=$_isInsideGeofence, '
+        'poll=${newInterval}s');
 
     // Only trigger on state change
     if (isInside && !_isInsideGeofence) {

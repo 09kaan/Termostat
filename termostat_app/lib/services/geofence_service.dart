@@ -1,7 +1,5 @@
 import 'dart:async';
-import 'dart:isolate';
 import 'package:flutter/material.dart';
-import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -10,101 +8,6 @@ import '../providers/settings_provider.dart';
 import '../constants/app_constants.dart';
 import 'notifications_service.dart';
 
-// This callback is called from the background isolate
-@pragma('vm:entry-point')
-void startCallback() {
-  FlutterForegroundTask.setTaskHandler(GeofenceTaskHandler());
-}
-
-/// Background task handler for geofence monitoring
-class GeofenceTaskHandler extends TaskHandler {
-  bool _isInsideGeofence = true;
-
-  @override
-  Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
-    debugPrint('GeofenceTaskHandler started');
-    // Load saved geofence state
-    final prefs = await SharedPreferences.getInstance();
-    _isInsideGeofence = prefs.getBool('isInsideGeofence') ?? true;
-  }
-
-  @override
-  void onRepeatEvent(DateTime timestamp) async {
-    try {
-      // Check location permission
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever) {
-        debugPrint('Background: Location permission denied');
-        return;
-      }
-
-      // Get current position
-      final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-      );
-
-      // Read home location from shared preferences
-      final prefs = await SharedPreferences.getInstance();
-      final homeLat = prefs.getDouble('homeLatitude') ??
-          AppConstants.defaultHomeLatitude;
-      final homeLng = prefs.getDouble('homeLongitude') ??
-          AppConstants.defaultHomeLongitude;
-      final homeRadius = prefs.getDouble('homeRadiusMeters') ??
-          AppConstants.defaultHomeRadiusMeters;
-
-      // Calculate distance
-      final distance = Geolocator.distanceBetween(
-        position.latitude,
-        position.longitude,
-        homeLat,
-        homeLng,
-      );
-
-      final isInside = distance <= homeRadius;
-
-      debugPrint('Background Geofence: distance=${distance.toStringAsFixed(0)}m, '
-          'radius=${homeRadius}m, inside=$isInside, wasInside=$_isInsideGeofence');
-
-      // State changed - send data to main isolate
-      if (isInside && !_isInsideGeofence) {
-        _isInsideGeofence = true;
-        await prefs.setBool('isInsideGeofence', true);
-        // Send event to main isolate
-        FlutterForegroundTask.sendDataToMain({'event': 'enter_home'});
-        // Also update notification
-        FlutterForegroundTask.updateService(
-          notificationTitle: 'Termostat - Evdesiniz',
-          notificationText: 'Konum takibi aktif | Mesafe: ${distance.toStringAsFixed(0)}m',
-        );
-      } else if (!isInside && _isInsideGeofence) {
-        _isInsideGeofence = false;
-        await prefs.setBool('isInsideGeofence', false);
-        FlutterForegroundTask.sendDataToMain({'event': 'exit_home'});
-        FlutterForegroundTask.updateService(
-          notificationTitle: 'Termostat - Dışarıdasınız',
-          notificationText: 'Konum takibi aktif | Mesafe: ${distance.toStringAsFixed(0)}m',
-        );
-      } else {
-        // Just update the distance in notification
-        final statusText = isInside ? 'Evdesiniz' : 'Dışarıdasınız';
-        FlutterForegroundTask.updateService(
-          notificationTitle: 'Termostat - $statusText',
-          notificationText: 'Konum takibi aktif | Mesafe: ${distance.toStringAsFixed(0)}m',
-        );
-      }
-    } catch (e) {
-      debugPrint('Background geofence error: $e');
-    }
-  }
-
-  @override
-  Future<void> onDestroy(DateTime timestamp) async {
-    debugPrint('GeofenceTaskHandler destroyed');
-  }
-}
-
-/// Main service class managing the foreground task
 class ThermostatGeofenceService {
   static final ThermostatGeofenceService _instance =
       ThermostatGeofenceService._internal();
@@ -113,7 +16,13 @@ class ThermostatGeofenceService {
 
   bool _isStarted = false;
   bool _isInitialized = false;
-  ReceivePort? _receivePort;
+  bool _isInsideGeofence = true; // Assume inside at start
+  Timer? _locationCheckTimer;
+  StreamSubscription<Position>? _positionSubscription;
+
+  // Store context-independent callbacks
+  ThermostatProvider? _thermostatProvider;
+  SettingsProvider? _settingsProvider;
 
   /// Initialize the geofence service
   Future<void> initialize(BuildContext context) async {
@@ -121,6 +30,12 @@ class ThermostatGeofenceService {
 
     try {
       // Check and request location permissions
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        debugPrint('Location services are disabled');
+        return;
+      }
+
       LocationPermission permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
@@ -134,130 +49,173 @@ class ThermostatGeofenceService {
         return;
       }
 
-      // Request "always" permission for background
-      if (permission == LocationPermission.whileInUse) {
-        permission = await Geolocator.requestPermission();
+      // Load saved state
+      final prefs = await SharedPreferences.getInstance();
+      _isInsideGeofence = prefs.getBool('isInsideGeofence') ?? true;
+
+      // Store provider references (these persist beyond widget lifecycle)
+      if (context.mounted) {
+        _thermostatProvider = Provider.of<ThermostatProvider>(context, listen: false);
+        _settingsProvider = Provider.of<SettingsProvider>(context, listen: false);
       }
 
-      // Initialize foreground task
-      FlutterForegroundTask.init(
-        androidNotificationOptions: AndroidNotificationOptions(
-          channelId: 'geofence_channel',
-          channelName: 'Geofence Service',
-          channelDescription: 'Konum takibi ile termostat kontrolü',
-          channelImportance: NotificationChannelImportance.LOW,
-          priority: NotificationPriority.LOW,
-        ),
-        iosNotificationOptions: const IOSNotificationOptions(
-          showNotification: false,
-          playSound: false,
-        ),
-        foregroundTaskOptions: ForegroundTaskOptions(
-          eventAction: ForegroundTaskEventAction.repeat(60000), // Check every 60 seconds
-          autoRunOnBoot: true,
-          autoRunOnMyPackageReplaced: true,
-          allowWakeLock: true,
-          allowWifiLock: true,
-        ),
-      );
-
       _isInitialized = true;
-      debugPrint('Geofence service initialized');
+      debugPrint('Geofence service initialized (inside=$_isInsideGeofence)');
     } catch (e) {
       debugPrint('Failed to initialize geofence: $e');
     }
   }
 
-  /// Start the geofence service (foreground task)
+  /// Start the geofence service
   Future<void> start(BuildContext context) async {
     if (_isStarted || !_isInitialized) return;
 
     try {
-      // Set up receive port to get messages from background
-      _receivePort = FlutterForegroundTask.receivePort;
-      _receivePort?.listen((data) {
-        if (data is Map) {
-          final event = data['event'];
-          if (event == 'enter_home') {
-            _handleEnterHome(context);
-          } else if (event == 'exit_home') {
-            _handleExitHome(context);
-          }
-        }
-      });
-
-      // Start the foreground task
-      if (await FlutterForegroundTask.isRunningService) {
-        debugPrint('Foreground task already running, restarting...');
-        await FlutterForegroundTask.restartService();
-      } else {
-        await FlutterForegroundTask.startService(
-          serviceId: 256,
-          notificationTitle: 'Termostat - Konum Takibi',
-          notificationText: 'Geofence aktif, konum izleniyor...',
-          callback: startCallback,
-        );
+      // Update provider references
+      if (context.mounted) {
+        _thermostatProvider = Provider.of<ThermostatProvider>(context, listen: false);
+        _settingsProvider = Provider.of<SettingsProvider>(context, listen: false);
       }
 
+      // Do initial location check
+      await _checkLocation();
+
+      // Check location every 60 seconds with a timer (backup)
+      _locationCheckTimer = Timer.periodic(
+        const Duration(seconds: 60),
+        (_) => _checkLocation(),
+      );
+
+      // Listen to location changes — works in foreground AND background on iOS
+      // if "Location updates" background mode is enabled in Info.plist
+      _positionSubscription = Geolocator.getPositionStream(
+        locationSettings: const AppleSettings(
+          accuracy: LocationAccuracy.hundredMeters, // Battery-friendly
+          activityType: ActivityType.automotiveNavigation,
+          distanceFilter: 50, // Only trigger when moved 50+ meters
+          pauseLocationUpdatesAutomatically: false,
+          showBackgroundLocationIndicator: true, // Blue bar on iOS
+          allowBackgroundLocationUpdates: true,  // Critical for background
+        ),
+      ).listen(
+        (Position position) {
+          _evaluatePosition(position);
+        },
+        onError: (error) {
+          debugPrint('Location stream error: $error');
+        },
+      );
+
       _isStarted = true;
-      debugPrint('Geofence foreground service started');
+      debugPrint('Geofence service started with background location updates');
     } catch (e) {
       debugPrint('Failed to start geofence: $e');
       _isStarted = false;
     }
   }
 
+  /// Check current location against home
+  Future<void> _checkLocation() async {
+    try {
+      final position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 10),
+      );
+      _evaluatePosition(position);
+    } catch (e) {
+      debugPrint('Error checking location: $e');
+    }
+  }
+
+  /// Evaluate if position is inside or outside geofence
+  void _evaluatePosition(Position position) {
+    if (_settingsProvider == null) return;
+
+    final homeLat = _settingsProvider!.homeLatitude;
+    final homeLng = _settingsProvider!.homeLongitude;
+    final homeRadius = _settingsProvider!.homeRadiusMeters;
+
+    final distance = Geolocator.distanceBetween(
+      position.latitude,
+      position.longitude,
+      homeLat,
+      homeLng,
+    );
+
+    final isInside = distance <= homeRadius;
+
+    debugPrint('📍 Geofence: distance=${distance.toStringAsFixed(0)}m, '
+        'radius=${homeRadius}m, '
+        'inside=$isInside, wasInside=$_isInsideGeofence');
+
+    // Only trigger on state change
+    if (isInside && !_isInsideGeofence) {
+      _isInsideGeofence = true;
+      _saveState(true);
+      _handleEnterHome();
+    } else if (!isInside && _isInsideGeofence) {
+      _isInsideGeofence = false;
+      _saveState(false);
+      _handleExitHome();
+    }
+  }
+
+  /// Save geofence state to persist across app restarts
+  Future<void> _saveState(bool isInside) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('isInsideGeofence', isInside);
+    } catch (e) {
+      debugPrint('Error saving geofence state: $e');
+    }
+  }
+
   /// Handle entering home
-  Future<void> _handleEnterHome(BuildContext context) async {
-    debugPrint('GEOFENCE: Entered home zone!');
+  Future<void> _handleEnterHome() async {
+    debugPrint('🏠 GEOFENCE: Entered home zone!');
     await notificationsService.showNotification(
       id: 1,
       title: 'Termostat',
       body: 'Eve hoş geldiniz! Isıtma açılıyor.',
     );
 
-    if (context.mounted) {
-      final thermostat =
-          Provider.of<ThermostatProvider>(context, listen: false);
-      if (thermostat.thermostat != null) {
-        thermostat.updateTemperature(AppConstants.homeTemperature);
-        thermostat.updateMode('on');
-      }
+    if (_thermostatProvider?.thermostat != null) {
+      _thermostatProvider!.updateTemperature(AppConstants.homeTemperature);
+      _thermostatProvider!.updateMode('on');
     }
   }
 
   /// Handle exiting home
-  Future<void> _handleExitHome(BuildContext context) async {
-    debugPrint('GEOFENCE: Exited home zone!');
+  Future<void> _handleExitHome() async {
+    debugPrint('🚶 GEOFENCE: Exited home zone!');
     await notificationsService.showNotification(
       id: 1,
       title: 'Termostat',
       body: 'Evden ayrıldınız. Eko moda geçiliyor.',
     );
 
-    if (context.mounted) {
-      final thermostat =
-          Provider.of<ThermostatProvider>(context, listen: false);
-      if (thermostat.thermostat != null) {
-        thermostat.updateTemperature(AppConstants.awayTemperature);
-        thermostat.updateMode('off');
-      }
+    if (_thermostatProvider?.thermostat != null) {
+      _thermostatProvider!.updateTemperature(AppConstants.awayTemperature);
+      _thermostatProvider!.updateMode('off');
     }
   }
 
   /// Update geofence with new settings (live)
   Future<void> updateGeofence(BuildContext context) async {
     if (!_isInitialized) return;
-    debugPrint('Geofence settings updated - takes effect on next check');
+    // Settings are read live from SettingsProvider, just do a fresh check
+    await _checkLocation();
+    debugPrint('Geofence settings updated - checked immediately');
   }
 
   /// Stop the geofence service
   Future<void> stop() async {
-    _receivePort?.close();
-    _receivePort = null;
-    await FlutterForegroundTask.stopService();
+    _locationCheckTimer?.cancel();
+    _locationCheckTimer = null;
+    await _positionSubscription?.cancel();
+    _positionSubscription = null;
     _isStarted = false;
-    debugPrint('Geofence foreground service stopped');
+    debugPrint('Geofence service stopped');
   }
 
   /// Check if the service is running
@@ -266,9 +224,13 @@ class ThermostatGeofenceService {
   /// Check if the service is initialized
   bool get isInitialized => _isInitialized;
 
+  /// Whether currently inside the geofence
+  bool get isInsideGeofence => _isInsideGeofence;
+
   /// Reset the service state
   void resetState() {
     _isStarted = false;
     _isInitialized = false;
+    _isInsideGeofence = true;
   }
 }

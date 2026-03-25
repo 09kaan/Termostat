@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:geolocator/geolocator.dart';
 import '../providers/settings_provider.dart';
 import '../providers/auth_provider.dart';
+import '../services/geofence_service.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -129,6 +130,24 @@ class SettingsScreen extends StatelessWidget {
                   },
                 ),
               ),
+              if (settings.geofenceEnabled)
+                ListenableBuilder(
+                  listenable: ThermostatGeofenceService(),
+                  builder: (context, _) {
+                    final geo = ThermostatGeofenceService();
+                    final dist = geo.lastDistance;
+                    final distText = dist >= 1000
+                        ? '${(dist / 1000).toStringAsFixed(1)} km'
+                        : '${dist.toStringAsFixed(0)} m';
+                    final statusIcon = geo.isInsideGeofence ? '🏠' : '🚶';
+                    final statusText = geo.isInsideGeofence ? 'Evdesiniz' : 'Dışarıdasınız';
+                    return ListTile(
+                      leading: Text(statusIcon, style: const TextStyle(fontSize: 24)),
+                      title: Text('$statusText — $distText'),
+                      subtitle: const Text('Eve olan mesafe (3 dk güncellenir)'),
+                    );
+                  },
+                ),
               ListTile(
                 title: const Text('Home Location'),
                 subtitle: Text(

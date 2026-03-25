@@ -8,7 +8,7 @@ import '../providers/settings_provider.dart';
 import '../constants/app_constants.dart';
 import 'notifications_service.dart';
 
-class ThermostatGeofenceService {
+class ThermostatGeofenceService extends ChangeNotifier {
   static final ThermostatGeofenceService _instance =
       ThermostatGeofenceService._internal();
   factory ThermostatGeofenceService() => _instance;
@@ -17,6 +17,7 @@ class ThermostatGeofenceService {
   bool _isStarted = false;
   bool _isInitialized = false;
   bool _isInsideGeofence = true; // Assume inside at start
+  double _lastDistance = 0.0; // meters from home
   Timer? _locationCheckTimer;
   StreamSubscription<Position>? _positionSubscription;
 
@@ -80,9 +81,9 @@ class ThermostatGeofenceService {
       // Do initial location check
       await _checkLocation();
 
-      // Check location every 60 seconds with a timer (backup)
+      // Check location every 3 minutes with a timer (backup)
       _locationCheckTimer = Timer.periodic(
-        const Duration(seconds: 60),
+        const Duration(seconds: 180),
         (_) => _checkLocation(),
       );
 
@@ -143,6 +144,9 @@ class ThermostatGeofenceService {
     );
 
     final isInside = distance <= homeRadius;
+
+    _lastDistance = distance;
+    notifyListeners();
 
     debugPrint('📍 Geofence: distance=${distance.toStringAsFixed(0)}m, '
         'radius=${homeRadius}m, '
@@ -226,6 +230,9 @@ class ThermostatGeofenceService {
 
   /// Whether currently inside the geofence
   bool get isInsideGeofence => _isInsideGeofence;
+
+  /// Last measured distance from home in meters
+  double get lastDistance => _lastDistance;
 
   /// Reset the service state
   void resetState() {

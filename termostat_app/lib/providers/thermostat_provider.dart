@@ -103,8 +103,8 @@ class ThermostatProvider with ChangeNotifier {
     if (_thermostat == null) return;
     WidgetService.updateWidget(
       temperature: _thermostat!.currentTemperature,
-      humidity: _thermostat!.currentHumidity.toInt(),
-      isHeating: _thermostat!.isHeating,
+      humidity: _thermostat!.humidity.toInt(),
+      isHeating: _thermostat!.mode == 'on',
       mode: _thermostat!.mode,
       targetTemp: _thermostat!.targetTemperature,
     );

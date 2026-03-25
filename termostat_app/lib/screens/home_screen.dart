@@ -12,6 +12,7 @@ import '../widgets/default_page_controller.dart';
 import './schedule_list_screen.dart';
 import './thermostat_log_screen.dart';
 import '../services/geofence_service.dart';
+import '../services/deep_link_service.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -24,6 +25,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final PageController _pageController = PageController(initialPage: 1);
   final ThermostatGeofenceService _geofenceService =
       ThermostatGeofenceService();
+  final DeepLinkService _deepLinkService = DeepLinkService();
 
   @override
   void initState() {
@@ -52,6 +54,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void _startGeofence() async {
     await _geofenceService.initialize(context);
     await _geofenceService.start(context);
+    await _deepLinkService.initialize(context);
   }
 
   void _onSettingsChanged() {
@@ -68,6 +71,7 @@ class _HomeScreenState extends State<HomeScreen> {
     Provider.of<SettingsProvider>(context, listen: false)
         .removeListener(_onSettingsChanged);
     _geofenceService.stop();
+    _deepLinkService.dispose();
     _pageController.dispose();
     super.dispose();
   }

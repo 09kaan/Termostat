@@ -89,8 +89,8 @@ class ThermostatGeofenceService {
       // Listen to location changes — works in foreground AND background on iOS
       // if "Location updates" background mode is enabled in Info.plist
       _positionSubscription = Geolocator.getPositionStream(
-        locationSettings: const AppleSettings(
-          accuracy: LocationAccuracy.hundredMeters, // Battery-friendly
+        locationSettings: AppleSettings(
+          accuracy: LocationAccuracy.low, // Battery-friendly
           activityType: ActivityType.automotiveNavigation,
           distanceFilter: 50, // Only trigger when moved 50+ meters
           pauseLocationUpdatesAutomatically: false,

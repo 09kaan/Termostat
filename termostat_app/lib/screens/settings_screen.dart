@@ -144,7 +144,7 @@ class SettingsScreen extends StatelessWidget {
                     return ListTile(
                       leading: Text(statusIcon, style: const TextStyle(fontSize: 24)),
                       title: Text('$statusText — $distText'),
-                      subtitle: Text('Kontrol aralığı: ${dist < 1000 ? "60 sn" : dist < 5000 ? "3 dk" : "5 dk"}'),
+                      subtitle: const Text('iOS native geofence aktif'),
                     );
                   },
                 ),

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -14,12 +15,12 @@ class ThermostatGeofenceService extends ChangeNotifier {
   factory ThermostatGeofenceService() => _instance;
   ThermostatGeofenceService._internal();
 
+  static const _channel = MethodChannel('geofence_channel');
+
   bool _isStarted = false;
   bool _isInitialized = false;
-  bool _isInsideGeofence = true; // Assume inside at start
-  double _lastDistance = 0.0; // meters from home
-  Timer? _locationCheckTimer;
-  StreamSubscription<Position>? _positionSubscription;
+  bool _isInsideGeofence = true;
+  double _lastDistance = 0.0;
 
   // Store context-independent callbacks
   ThermostatProvider? _thermostatProvider;
@@ -54,11 +55,14 @@ class ThermostatGeofenceService extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       _isInsideGeofence = prefs.getBool('isInsideGeofence') ?? true;
 
-      // Store provider references (these persist beyond widget lifecycle)
+      // Store provider references
       if (context.mounted) {
         _thermostatProvider = Provider.of<ThermostatProvider>(context, listen: false);
         _settingsProvider = Provider.of<SettingsProvider>(context, listen: false);
       }
+
+      // Listen for native geofence events from iOS
+      _channel.setMethodCallHandler(_handleNativeEvent);
 
       _isInitialized = true;
       debugPrint('Geofence service initialized (inside=$_isInsideGeofence)');
@@ -67,125 +71,88 @@ class ThermostatGeofenceService extends ChangeNotifier {
     }
   }
 
-  /// Start the geofence service
+  /// Start native iOS geofence monitoring
   Future<void> start(BuildContext context) async {
     if (_isStarted || !_isInitialized) return;
 
     try {
-      // Update provider references
       if (context.mounted) {
         _thermostatProvider = Provider.of<ThermostatProvider>(context, listen: false);
         _settingsProvider = Provider.of<SettingsProvider>(context, listen: false);
       }
 
-      // Do initial location check
-      await _checkLocation();
+      final lat = _settingsProvider!.homeLatitude;
+      final lng = _settingsProvider!.homeLongitude;
+      final radius = _settingsProvider!.homeRadiusMeters;
 
-      // Start adaptive timer (interval depends on distance)
-      _scheduleNextCheck();
+      // Start native iOS CLLocationManager geofencing
+      await _channel.invokeMethod('startMonitoring', {
+        'latitude': lat,
+        'longitude': lng,
+        'radius': radius,
+      });
 
-      // Listen to location changes — works in foreground AND background on iOS
-      // if "Location updates" background mode is enabled in Info.plist
-      _positionSubscription = Geolocator.getPositionStream(
-        locationSettings: AppleSettings(
-          accuracy: LocationAccuracy.low, // Battery-friendly
-          activityType: ActivityType.automotiveNavigation,
-          distanceFilter: 50, // Only trigger when moved 50+ meters
-          pauseLocationUpdatesAutomatically: false,
-          showBackgroundLocationIndicator: false, // No blue bar
-          allowBackgroundLocationUpdates: true,  // Critical for background
-        ),
-      ).listen(
-        (Position position) {
-          _evaluatePosition(position);
-        },
-        onError: (error) {
-          debugPrint('Location stream error: $error');
-        },
-      );
+      // Get initial distance
+      await _updateDistance();
 
       _isStarted = true;
-      debugPrint('Geofence service started with background location updates');
+      debugPrint('🎯 Native geofence started: lat=$lat, lng=$lng, radius=${radius}m');
     } catch (e) {
-      debugPrint('Failed to start geofence: $e');
+      debugPrint('Failed to start native geofence: $e');
       _isStarted = false;
     }
   }
 
-  /// Get adaptive polling interval based on distance from home
-  int _getPollingIntervalSeconds() {
-    if (_lastDistance < 1000) return 60;       // < 1km → 60 sn
-    if (_lastDistance < 5000) return 180;      // 1-5km → 3 dk
-    return 300;                                // > 5km → 5 dk
+  /// Handle events from native iOS
+  Future<dynamic> _handleNativeEvent(MethodCall call) async {
+    switch (call.method) {
+      case 'onEnterRegion':
+        debugPrint('🏠 [Native] Entered home region!');
+        _isInsideGeofence = true;
+        _lastDistance = 0;
+        _saveState(true);
+        _handleEnterHome();
+        notifyListeners();
+        break;
+
+      case 'onExitRegion':
+        debugPrint('🚶 [Native] Exited home region!');
+        _isInsideGeofence = false;
+        _saveState(false);
+        _handleExitHome();
+        await _updateDistance();
+        notifyListeners();
+        break;
+
+      case 'onStateChanged':
+        final args = call.arguments as Map?;
+        final state = args?['state'] as String? ?? 'unknown';
+        debugPrint('📍 [Native] State: $state');
+        if (state == 'inside') {
+          _isInsideGeofence = true;
+          _lastDistance = 0;
+        } else if (state == 'outside') {
+          _isInsideGeofence = false;
+          await _updateDistance();
+        }
+        notifyListeners();
+        break;
+    }
+    return null;
   }
 
-  /// Schedule next location check with adaptive interval
-  void _scheduleNextCheck() {
-    _locationCheckTimer?.cancel();
-    final interval = _getPollingIntervalSeconds();
-    _locationCheckTimer = Timer(
-      Duration(seconds: interval),
-      () {
-        _checkLocation();
-        _scheduleNextCheck(); // Reschedule with potentially new interval
-      },
-    );
-    debugPrint('⏱️ Next check in ${interval}s (distance: ${_lastDistance.toStringAsFixed(0)}m)');
-  }
-
-  /// Check current location against home
-  Future<void> _checkLocation() async {
+  /// Get current distance from home
+  Future<void> _updateDistance() async {
     try {
-      final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-        timeLimit: const Duration(seconds: 10),
-      );
-      _evaluatePosition(position);
+      if (_settingsProvider == null) return;
+      final distance = await _channel.invokeMethod<double>('getDistance', {
+        'latitude': _settingsProvider!.homeLatitude,
+        'longitude': _settingsProvider!.homeLongitude,
+      });
+      _lastDistance = distance ?? 0.0;
+      notifyListeners();
     } catch (e) {
-      debugPrint('Error checking location: $e');
-    }
-  }
-
-  /// Evaluate if position is inside or outside geofence
-  void _evaluatePosition(Position position) {
-    if (_settingsProvider == null) return;
-
-    final homeLat = _settingsProvider!.homeLatitude;
-    final homeLng = _settingsProvider!.homeLongitude;
-    final homeRadius = _settingsProvider!.homeRadiusMeters;
-
-    final distance = Geolocator.distanceBetween(
-      position.latitude,
-      position.longitude,
-      homeLat,
-      homeLng,
-    );
-
-    final isInside = distance <= homeRadius;
-
-    // Update distance and reschedule if interval changed
-    final oldInterval = _getPollingIntervalSeconds();
-    _lastDistance = distance;
-    notifyListeners();
-    final newInterval = _getPollingIntervalSeconds();
-    if (oldInterval != newInterval && _isStarted) {
-      _scheduleNextCheck();
-    }
-
-    debugPrint('📍 Geofence: distance=${distance.toStringAsFixed(0)}m, '
-        'radius=${homeRadius}m, '
-        'inside=$isInside, wasInside=$_isInsideGeofence, '
-        'poll=${newInterval}s');
-
-    // Only trigger on state change
-    if (isInside && !_isInsideGeofence) {
-      _isInsideGeofence = true;
-      _saveState(true);
-      _handleEnterHome();
-    } else if (!isInside && _isInsideGeofence) {
-      _isInsideGeofence = false;
-      _saveState(false);
-      _handleExitHome();
+      debugPrint('Error getting distance: $e');
     }
   }
 
@@ -231,18 +198,32 @@ class ThermostatGeofenceService extends ChangeNotifier {
 
   /// Update geofence with new settings (live)
   Future<void> updateGeofence(BuildContext context) async {
-    if (!_isInitialized) return;
-    // Settings are read live from SettingsProvider, just do a fresh check
-    await _checkLocation();
-    debugPrint('Geofence settings updated - checked immediately');
+    if (!_isInitialized || !_isStarted) return;
+    if (context.mounted) {
+      _settingsProvider = Provider.of<SettingsProvider>(context, listen: false);
+    }
+
+    final lat = _settingsProvider!.homeLatitude;
+    final lng = _settingsProvider!.homeLongitude;
+    final radius = _settingsProvider!.homeRadiusMeters;
+
+    // Restart monitoring with new coordinates
+    await _channel.invokeMethod('startMonitoring', {
+      'latitude': lat,
+      'longitude': lng,
+      'radius': radius,
+    });
+    await _updateDistance();
+    debugPrint('Geofence updated: lat=$lat, lng=$lng, radius=${radius}m');
   }
 
   /// Stop the geofence service
   Future<void> stop() async {
-    _locationCheckTimer?.cancel();
-    _locationCheckTimer = null;
-    await _positionSubscription?.cancel();
-    _positionSubscription = null;
+    try {
+      await _channel.invokeMethod('stopMonitoring');
+    } catch (e) {
+      debugPrint('Error stopping native geofence: $e');
+    }
     _isStarted = false;
     debugPrint('Geofence service stopped');
   }

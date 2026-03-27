@@ -165,7 +165,11 @@ import UserNotifications
     }
     
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        print("[Geofence] Authorization changed: \(manager.authorizationStatus.rawValue)")
+        if #available(iOS 14.0, *) {
+            print("[Geofence] Authorization changed: \(manager.authorizationStatus.rawValue)")
+        } else {
+            print("[Geofence] Authorization changed: \(CLLocationManager.authorizationStatus().rawValue)")
+        }
     }
     
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {

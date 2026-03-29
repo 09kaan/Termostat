@@ -27,7 +27,7 @@ void setup() {
   Serial.begin(115200);
 
   pinMode(rolePin, OUTPUT);
-  digitalWrite(rolePin, LOW);  // cihaz açılırken kapalı başlasın
+  digitalWrite(rolePin, HIGH);  // cihaz açılırken kapalı başlasın
 
   // ---- WiFi Manager ----
   WiFiManager wm;
@@ -59,7 +59,7 @@ void loop() {
   // 3) Röleyi güncelle
   if (isHeating != lastHeatingState) {
     lastHeatingState = isHeating;
-    digitalWrite(rolePin, isHeating ? HIGH : LOW);
+    digitalWrite(rolePin, isHeating ? LOW : HIGH);
     Serial.print("[RÖLE] Yeni durum: ");
     Serial.println(isHeating ? "ON" : "OFF");
   }

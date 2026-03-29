@@ -161,7 +161,7 @@ void pollDeviceSnapshot() {
   lastDevicePoll = now;
   if (WiFi.status() != WL_CONNECTED) return;
 
-  String url = "https://" + String(FIREBASE_HOST) + "/devices/device1.json?auth=" + String(FIREBASE_SECRET);
+  String url = "https://" + String(FIREBASE_HOST) + "/devices/device1.json?shallow=true&auth=" + String(FIREBASE_SECRET);
   String payload;
   if (!httpsGET(url, payload)) { Serial.println("[DEV] GET fail"); return; }
 

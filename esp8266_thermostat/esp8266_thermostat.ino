@@ -15,6 +15,13 @@ const int rolePin = 0;
 
 // En son stabil kaydedilen ısıtma durumu
 bool lastHeatingState = false;
+bool isHeating = false;
+String deviceMode = "off";
+float targetTemp = 24.0;
+float currentTemp = 0.0;
+
+// Histerezis (derece)
+const float HYST = 0.5f;
 
 void setup() {
   Serial.begin(115200);
@@ -35,25 +42,94 @@ void setup() {
 }
 
 void loop() {
-  bool newHeatingState = lastHeatingState;   // default: eski değer
-
-  // Firebase'den oku (başarısız olursa mevcut değer korunacak)
-  if (Firebase.getBool(fbdo, "/devices/device1/isHeating")) {
-    newHeatingState = fbdo.boolData();
-  } else {
-    Serial.println("[WARN] Firebase okunamadı → eski değer korunuyor.");
+  // WiFi kopmuşsa yeniden bağlan
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[WARN] WiFi koptu, yeniden bağlanıyor...");
+    WiFi.reconnect();
+    delay(5000);
+    return;
   }
 
-  // Eğer değiştiyse röleyi güncelle
-  if (newHeatingState != lastHeatingState) {
-    lastHeatingState = newHeatingState;
+  // 1) Firebase'den mode, targetTemp, currentTemp, isHeating oku
+  readFirebaseState();
 
-    // Röle sür
-    digitalWrite(rolePin, lastHeatingState ? HIGH : LOW);
+  // 2) Termostat kararı: sıcaklığa göre isHeating belirle
+  thermostatDecide();
 
+  // 3) Röleyi güncelle
+  if (isHeating != lastHeatingState) {
+    lastHeatingState = isHeating;
+    digitalWrite(rolePin, isHeating ? HIGH : LOW);
     Serial.print("[RÖLE] Yeni durum: ");
-    Serial.println(lastHeatingState ? "ON" : "OFF");
+    Serial.println(isHeating ? "ON" : "OFF");
   }
 
-  delay(10000); // 10 saniye (eskiden 5sn idi, Firebase kotası için artırıldı)
+  delay(10000); // 10 saniye
+}
+
+// Firebase'den cihaz durumunu oku
+void readFirebaseState() {
+  // Mode oku
+  if (Firebase.getString(fbdo, "/devices/device1/mode")) {
+    String m = fbdo.stringData();
+    m.toLowerCase();
+    if (m == "heating_on") m = "on";
+    if (m == "heating_off") m = "off";
+    if (m == "on" || m == "off") {
+      deviceMode = m;
+    }
+  } else {
+    Serial.println("[WARN] mode okunamadı");
+  }
+
+  // Target temperature oku
+  if (Firebase.getFloat(fbdo, "/devices/device1/targetTemperature")) {
+    targetTemp = fbdo.floatData();
+  } else {
+    Serial.println("[WARN] targetTemperature okunamadı");
+  }
+
+  // Current temperature oku (ESP32 tarafından yazılıyor)
+  if (Firebase.getFloat(fbdo, "/devices/device1/currentTemperature")) {
+    currentTemp = fbdo.floatData();
+  } else {
+    Serial.println("[WARN] currentTemperature okunamadı");
+  }
+
+  // Mevcut isHeating durumunu oku
+  if (Firebase.getBool(fbdo, "/devices/device1/isHeating")) {
+    isHeating = fbdo.boolData();
+  } else {
+    Serial.println("[WARN] isHeating okunamadı");
+  }
+
+  Serial.printf("[STATE] mode=%s, target=%.1f, current=%.1f, isHeating=%s\n",
+    deviceMode.c_str(), targetTemp, currentTemp, isHeating ? "true" : "false");
+}
+
+// Termostat kararı: sıcaklığa göre isHeating değiştir
+void thermostatDecide() {
+  bool desired = isHeating; // varsayılan: mevcut hali koru
+
+  if (deviceMode == "off") {
+    // Mode OFF → kesin kapat
+    desired = false;
+  } else {
+    // Mode ON → sıcaklığa göre karar ver
+    if (isHeating && currentTemp >= targetTemp) {
+      desired = false;  // Hedefe ulaştı → kapat
+    } else if (!isHeating && currentTemp <= (targetTemp - HYST)) {
+      desired = true;   // Histerezis altına düştü → aç
+    }
+  }
+
+  // Değiştiyse Firebase'e yaz
+  if (desired != isHeating) {
+    isHeating = desired;
+    if (Firebase.setBool(fbdo, "/devices/device1/isHeating", isHeating)) {
+      Serial.printf("[CTRL] isHeating -> %s (Firebase OK)\n", isHeating ? "true" : "false");
+    } else {
+      Serial.printf("[CTRL] isHeating -> %s (Firebase FAIL)\n", isHeating ? "true" : "false");
+    }
+  }
 }

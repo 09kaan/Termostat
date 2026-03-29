@@ -213,7 +213,8 @@ import UserNotifications
         
         let body: [String: Any] = [
             "mode": mode,
-            "targetTemperature": targetTemp
+            "targetTemperature": targetTemp,
+            "isHeating": mode == "on" ? true : false
         ]
         
         do {

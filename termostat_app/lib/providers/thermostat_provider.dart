@@ -62,6 +62,12 @@ class ThermostatProvider with ChangeNotifier {
 
     try {
       await _database.child('devices/${_thermostat!.id}/mode').set(mode);
+      
+      // Mode OFF → isHeating kesin false
+      if (mode == 'off') {
+        await _database.child('devices/${_thermostat!.id}/isHeating').set(false);
+      }
+      
       _thermostat = _thermostat!.copyWith(mode: mode);
 
       // Log the thermostat state change

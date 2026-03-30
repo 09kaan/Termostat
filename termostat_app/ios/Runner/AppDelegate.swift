@@ -12,7 +12,7 @@ import UserNotifications
     
     // Firebase REST API (works even when Flutter engine is dead)
     private let firebaseBaseURL = "https://termometer-4b9d6-default-rtdb.europe-west1.firebasedatabase.app"
-    private let firebaseSecret = "YOUR_FIREBASE_DATABASE_SECRET"  // Same secret as ESP32/ESP8266
+    private let firebaseSecret = "zHPpeMbreSIUSFwGaR5y9bxv7Tc5FHdW4IDj2ql1"  // Same secret as ESP32/ESP8266
     private let deviceId = "device1"
     
     override func application(
@@ -26,59 +26,117 @@ import UserNotifications
         locationManager.allowsBackgroundLocationUpdates = true
         locationManager.pausesLocationUpdatesAutomatically = false
         
-        // Setup method channel
-        let controller = window?.rootViewController as! FlutterViewController
-        methodChannel = FlutterMethodChannel(name: "geofence_channel", binaryMessenger: controller.binaryMessenger)
-        
-        methodChannel?.setMethodCallHandler { [weak self] (call, result) in
-            guard let self = self else { return }
+        // Setup method channel (safely)
+        if let controller = window?.rootViewController as? FlutterViewController {
+            methodChannel = FlutterMethodChannel(name: "geofence_channel", binaryMessenger: controller.binaryMessenger)
             
-            switch call.method {
-            case "startMonitoring":
-                if let args = call.arguments as? [String: Any],
-                   let lat = args["latitude"] as? Double,
-                   let lng = args["longitude"] as? Double,
-                   let radius = args["radius"] as? Double {
-                    self.startMonitoring(latitude: lat, longitude: lng, radius: radius)
+            methodChannel?.setMethodCallHandler { [weak self] (call, result) in
+                guard let self = self else { return }
+                
+                switch call.method {
+                case "startMonitoring":
+                    if let args = call.arguments as? [String: Any],
+                       let lat = args["latitude"] as? Double,
+                       let lng = args["longitude"] as? Double,
+                       let radius = args["radius"] as? Double {
+                        self.startMonitoring(latitude: lat, longitude: lng, radius: radius)
+                        result(true)
+                    } else {
+                        result(FlutterError(code: "INVALID_ARGS", message: "Missing lat/lng/radius", details: nil))
+                    }
+                    
+                case "stopMonitoring":
+                    self.stopMonitoring()
                     result(true)
-                } else {
-                    result(FlutterError(code: "INVALID_ARGS", message: "Missing lat/lng/radius", details: nil))
+                    
+                case "getDistance":
+                    if let args = call.arguments as? [String: Any],
+                       let lat = args["latitude"] as? Double,
+                       let lng = args["longitude"] as? Double {
+                        self.getDistanceToHome(latitude: lat, longitude: lng, result: result)
+                    } else {
+                        result(0.0)
+                    }
+                    
+                case "isMonitoring":
+                    let isMonitoring = !locationManager.monitoredRegions.isEmpty
+                    result(isMonitoring)
+                    
+                default:
+                    result(FlutterMethodNotImplemented)
                 }
-                
-            case "stopMonitoring":
-                self.stopMonitoring()
-                result(true)
-                
-            case "getDistance":
-                if let args = call.arguments as? [String: Any],
-                   let lat = args["latitude"] as? Double,
-                   let lng = args["longitude"] as? Double {
-                    self.getDistanceToHome(latitude: lat, longitude: lng, result: result)
-                } else {
-                    result(0.0)
-                }
-                
-            case "isMonitoring":
-                let isMonitoring = !locationManager.monitoredRegions.isEmpty
-                result(isMonitoring)
-                
-            default:
-                result(FlutterMethodNotImplemented)
             }
         }
         
-        // Check if launched by geofence event
+        // Check if launched by geofence event (iOS woke us up!)
         if let _ = launchOptions?[.location] {
-            print("[Geofence] App launched by location event!")
-            // Location manager delegate will be called automatically
+            print("[Geofence] ⚡ App launched by location event!")
         }
+        
+        // Auto-restore geofence monitoring from saved coordinates
+        // This ensures geofence survives app being killed by iOS
+        restoreGeofenceIfNeeded()
         
         // Request notification permission
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
             print("[Geofence] Notification permission: \(granted)")
         }
         
+        // Enable Background App Refresh (safety net)
+        application.setMinimumBackgroundFetchInterval(UIApplication.backgroundFetchIntervalMinimum)
+        print("[Geofence] Background fetch enabled")
+        
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    }
+    
+    // MARK: - Background App Refresh
+    
+    override func application(_ application: UIApplication, performFetchWithCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
+        print("[BGFetch] ⏰ Background fetch triggered")
+        
+        let defaults = UserDefaults.standard
+        guard defaults.bool(forKey: "geofence_enabled") else {
+            print("[BGFetch] Geofence not enabled, skipping")
+            completionHandler(.noData)
+            return
+        }
+        
+        let homeLat = defaults.double(forKey: "geofence_lat")
+        let homeLng = defaults.double(forKey: "geofence_lng")
+        let homeRadius = defaults.double(forKey: "geofence_radius")
+        
+        guard homeLat != 0 && homeLng != 0 else {
+            print("[BGFetch] No saved coordinates")
+            completionHandler(.noData)
+            return
+        }
+        
+        // Get current location
+        locationManager.requestLocation()
+        
+        // Use last known location
+        guard let currentLocation = locationManager.location else {
+            print("[BGFetch] No location available")
+            completionHandler(.failed)
+            return
+        }
+        
+        let homeLocation = CLLocation(latitude: homeLat, longitude: homeLng)
+        let distance = currentLocation.distance(from: homeLocation)
+        let isInside = distance <= homeRadius
+        let wasInside = defaults.bool(forKey: "isInsideGeofence")
+        
+        print("[BGFetch] Distance: \(Int(distance))m, inside: \(isInside), wasInside: \(wasInside)")
+        
+        // State changed — take action!
+        if isInside != wasInside {
+            print("[BGFetch] 🔄 State changed! Triggering geofence action")
+            defaults.set(isInside, forKey: "isInsideGeofence")
+            handleGeofenceEvent(isEntering: isInside)
+            completionHandler(.newData)
+        } else {
+            completionHandler(.noData)
+        }
     }
     
     // MARK: - Geofence Management
@@ -92,6 +150,13 @@ import UserNotifications
             return
         }
         
+        // Save coordinates to UserDefaults (persist across app kills)
+        let defaults = UserDefaults.standard
+        defaults.set(latitude, forKey: "geofence_lat")
+        defaults.set(longitude, forKey: "geofence_lng")
+        defaults.set(radius, forKey: "geofence_radius")
+        defaults.set(true, forKey: "geofence_enabled")
+        
         let center = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
         let clampedRadius = min(radius, locationManager.maximumRegionMonitoringDistance)
         let region = CLCircularRegion(center: center, radius: clampedRadius, identifier: regionIdentifier)
@@ -104,14 +169,42 @@ import UserNotifications
         // Also request initial state
         locationManager.requestState(for: region)
         
-        print("[Geofence] Started monitoring: lat=\(latitude), lng=\(longitude), radius=\(clampedRadius)m")
+        print("[Geofence] ✅ Started monitoring: lat=\(latitude), lng=\(longitude), radius=\(clampedRadius)m")
     }
     
     private func stopMonitoring() {
         for region in locationManager.monitoredRegions {
             locationManager.stopMonitoring(for: region)
         }
+        UserDefaults.standard.set(false, forKey: "geofence_enabled")
         print("[Geofence] Stopped all monitoring")
+    }
+    
+    /// Restore geofence monitoring from saved coordinates (after app restart/kill)
+    private func restoreGeofenceIfNeeded() {
+        let defaults = UserDefaults.standard
+        guard defaults.bool(forKey: "geofence_enabled") else {
+            print("[Geofence] Restore: geofence not enabled, skipping")
+            return
+        }
+        
+        // If already monitoring, don't re-register
+        if !locationManager.monitoredRegions.isEmpty {
+            print("[Geofence] Restore: already monitoring \(locationManager.monitoredRegions.count) region(s)")
+            return
+        }
+        
+        let lat = defaults.double(forKey: "geofence_lat")
+        let lng = defaults.double(forKey: "geofence_lng")
+        let radius = defaults.double(forKey: "geofence_radius")
+        
+        guard lat != 0 && lng != 0 && radius > 0 else {
+            print("[Geofence] Restore: no saved coordinates")
+            return
+        }
+        
+        print("[Geofence] 🔄 Restoring geofence from saved coordinates...")
+        startMonitoring(latitude: lat, longitude: lng, radius: radius)
     }
     
     private func getDistanceToHome(latitude: Double, longitude: Double, result: @escaping FlutterResult) {

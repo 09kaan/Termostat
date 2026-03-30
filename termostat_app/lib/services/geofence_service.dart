@@ -127,8 +127,20 @@ class ThermostatGeofenceService extends ChangeNotifier {
       case 'onStateChanged':
         final args = call.arguments as Map?;
         final state = args?['state'] as String? ?? 'unknown';
-        debugPrint('📍 [Native] State: $state');
-        if (state == 'inside') {
+        debugPrint('📍 [Native] State: $state (was inside=$_isInsideGeofence)');
+        if (state == 'inside' && !_isInsideGeofence) {
+          // Transitioned to inside — trigger enter actions
+          _isInsideGeofence = true;
+          _lastDistance = 0;
+          _saveState(true);
+          _handleEnterHome();
+        } else if (state == 'outside' && _isInsideGeofence) {
+          // Transitioned to outside — trigger exit actions
+          _isInsideGeofence = false;
+          _saveState(false);
+          _handleExitHome();
+          await _updateDistance();
+        } else if (state == 'inside') {
           _isInsideGeofence = true;
           _lastDistance = 0;
         } else if (state == 'outside') {

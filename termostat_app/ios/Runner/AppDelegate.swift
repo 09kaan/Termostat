@@ -12,6 +12,7 @@ import UserNotifications
     
     // Firebase REST API (works even when Flutter engine is dead)
     private let firebaseBaseURL = "https://termometer-4b9d6-default-rtdb.europe-west1.firebasedatabase.app"
+    private let firebaseSecret = "YOUR_FIREBASE_DATABASE_SECRET"  // Same secret as ESP32/ESP8266
     private let deviceId = "device1"
     
     override func application(
@@ -206,7 +207,7 @@ import UserNotifications
     }
     
     private func updateFirebase(mode: String, targetTemp: Double) {
-        let url = URL(string: "\(firebaseBaseURL)/devices/\(deviceId).json")!
+        let url = URL(string: "\(firebaseBaseURL)/devices/\(deviceId).json?auth=\(firebaseSecret)")!
         var request = URLRequest(url: url)
         request.httpMethod = "PATCH"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")

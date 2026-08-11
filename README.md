@@ -73,19 +73,6 @@ Sistem iki ayrı mikrodenetleyici kullanır: ekranlı **ESP32** ortam ölçümle
   </tr>
 </table>
 
-Cihaz fotoğrafları hazır olduğunda aşağıdaki adlarla eklenebilir:
-
-```text
-docs/images/esp32-device.jpg
-docs/images/esp8266-relay-device.jpg
-```
-
-Ardından yukarıdaki geçici açıklamalar şu görsel etiketleriyle değiştirilebilir:
-
-```html
-<img src="docs/images/esp32-device.jpg" alt="ESP32 ölçüm birimi" width="420">
-<img src="docs/images/esp8266-relay-device.jpg" alt="ESP8266 röle birimi" width="420">
-```
 
 ## Mobil Uygulama
 

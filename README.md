@@ -96,9 +96,9 @@ Ardından yukarıdaki geçici açıklamalar şu görsel etiketleriyle değiştir
     <td align="center"><strong>Programlar</strong></td>
   </tr>
   <tr>
-    <td><img src="docs/images/app-home.jpg" alt="Ana kontrol ekranı" width="280"></td>
-    <td><img src="docs/images/app-usage.jpg" alt="Kullanım geçmişi ekranı" width="280"></td>
-    <td><img src="docs/images/app-schedules.jpg" alt="Isıtma programları ekranı" width="280"></td>
+    <td><img src="docs/images/app-home.jpeg" alt="Ana kontrol ekranı" width="280"></td>
+    <td><img src="docs/images/app-usage.jpeg" alt="Kullanım geçmişi ekranı" width="280"></td>
+    <td><img src="docs/images/app-schedules.jpeg" alt="Isıtma programları ekranı" width="280"></td>
   </tr>
 </table>
 

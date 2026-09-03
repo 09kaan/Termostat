@@ -345,6 +345,71 @@ class _HomeScreenState extends State<HomeScreen> {
                             onModeChanged: thermostat.updateMode,
                           ),
                           const SizedBox(height: 8),
+                          Card(
+                            elevation: 2,
+                            child: Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    width: 44,
+                                    height: 44,
+                                    decoration: BoxDecoration(
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .primaryContainer,
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Icon(
+                                      Icons.computer,
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .onPrimaryContainer,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  const Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          'Bilgisayar',
+                                          style: TextStyle(
+                                            fontSize: 17,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                        SizedBox(height: 2),
+                                        Text(
+                                          'Wake-on-LAN ile uzaktan aç',
+                                          style: TextStyle(fontSize: 13),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  FilledButton.icon(
+                                    onPressed: thermostat
+                                            .wakeRequestInProgress
+                                        ? null
+                                        : () => _requestPcWake(thermostat),
+                                    icon: thermostat.wakeRequestInProgress
+                                        ? const SizedBox(
+                                            width: 18,
+                                            height: 18,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                            ),
+                                          )
+                                        : const Icon(Icons.power_settings_new),
+                                    label: const Text("PC'yi Aç"),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
                           const WeatherCard(),
                           const SizedBox(height: 8),
                         ],
@@ -357,6 +422,45 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           const ScheduleListScreen(),
         ],
+      ),
+    );
+  }
+
+  Future<void> _requestPcWake(ThermostatProvider thermostat) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Bilgisayar açılsın mı?'),
+        content: const Text(
+          'ESP32, bilgisayara Wake-on-LAN sinyali gönderecek.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Vazgeç'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            icon: const Icon(Icons.power_settings_new),
+            label: const Text('Aç'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    final sent = await thermostat.wakePc();
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          sent
+              ? 'PC açma komutu gönderildi. ESP32 en geç 30 saniye içinde işleyecek.'
+              : (thermostat.wakeError ?? 'Komut gönderilemedi.'),
+        ),
+        backgroundColor: sent ? null : Theme.of(context).colorScheme.error,
       ),
     );
   }

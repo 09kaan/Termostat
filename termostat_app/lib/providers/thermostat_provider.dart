@@ -8,10 +8,14 @@ class ThermostatProvider with ChangeNotifier {
   Thermostat? _thermostat;
   bool _isLoading = false;
   String? _error;
+  bool _wakeRequestInProgress = false;
+  String? _wakeError;
 
   Thermostat? get thermostat => _thermostat;
   bool get isLoading => _isLoading;
   String? get error => _error;
+  bool get wakeRequestInProgress => _wakeRequestInProgress;
+  String? get wakeError => _wakeError;
 
   Future<void> initializeThermostat(String deviceId) async {
     _isLoading = true;
@@ -83,6 +87,33 @@ class ThermostatProvider with ChangeNotifier {
       notifyListeners();
     } catch (e) {
       _error = 'Failed to update mode: $e';
+      notifyListeners();
+    }
+  }
+
+  /// Firebase'e tek seferlik Wake-on-LAN komutu yazar.
+  Future<bool> wakePc() async {
+    if (_thermostat == null || _wakeRequestInProgress) return false;
+
+    _wakeRequestInProgress = true;
+    _wakeError = null;
+    notifyListeners();
+
+    try {
+      await _database
+          .child('devices/${_thermostat!.id}/commands/wakePc')
+          .set({
+        'requested': true,
+        'requestedAt': ServerValue.timestamp,
+        'requestedBy': 'thermostat_app',
+        'status': 'pending',
+      });
+      return true;
+    } catch (e) {
+      _wakeError = 'PC açma komutu gönderilemedi: $e';
+      return false;
+    } finally {
+      _wakeRequestInProgress = false;
       notifyListeners();
     }
   }

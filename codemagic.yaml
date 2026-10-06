@@ -77,7 +77,7 @@ workflows:
 
           # Unsigned release build for CI verification without exposing private signing certificates/keys
           # Both stdout and stderr are piped through tee into flutter_release_build.log
-          flutter build ios --release --no-codesign 2>&1 | tee ios/build/flutter_release_build.log
+          flutter build ios --release --no-codesign --build-number="$((PROJECT_BUILD_NUMBER + 100))" 2>&1 | tee ios/build/flutter_release_build.log
     artifacts:
       - termostat_app/ios/build/RunnerTests.xcresult
       - termostat_app/ios/build/xcodebuild_test.log
@@ -113,7 +113,7 @@ workflows:
         script: |
           set -euo pipefail
           mkdir -p ios/build
-          flutter build ipa --release --export-options-plist "$HOME/export_options.plist" 2>&1 | tee ios/build/widget_signed_build.log
+          flutter build ipa --release --build-number="$((PROJECT_BUILD_NUMBER + 100))" --export-options-plist "$HOME/export_options.plist" 2>&1 | tee ios/build/widget_signed_build.log
     artifacts:
       - termostat_app/build/ios/ipa/*.ipa
       - termostat_app/build/ios/archive/*.xcarchive

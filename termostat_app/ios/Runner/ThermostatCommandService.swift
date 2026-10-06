@@ -110,7 +110,7 @@ public protocol ThermostatAuthSessionProviding: Sendable {
     func getValidIDToken(forcingRefresh: Bool) async throws -> String
 }
 
-public protocol AuthSessionListenerProtocol: AnyObject, @unchecked Sendable {
+public protocol AuthSessionListenerProtocol: Sendable {
     func registerAuthStateListener(_ listener: @escaping @Sendable (Bool) -> Void) -> AnyObject
     func unregisterAuthStateListener(_ handle: AnyObject)
     var hasCurrentUser: Bool { get }
@@ -125,9 +125,10 @@ public final class AuthStateListenerCoordinator: @unchecked Sendable {
     private var listenerHandle: AnyObject?
     private var timeoutTimer: DispatchSourceTimer?
     private var continuation: CheckedContinuation<Void, Error>?
-    private weak var authListenerSource: AuthSessionListenerProtocol?
+    private let authListenerSource: AuthSessionListenerProtocol?
+    public var onCompletion: (@Sendable () -> Void)?
 
-    public init(authListenerSource: AuthSessionListenerProtocol, continuation: CheckedContinuation<Void, Error>) {
+    public init(authListenerSource: AuthSessionListenerProtocol?, continuation: CheckedContinuation<Void, Error>) {
         self.authListenerSource = authListenerSource
         self.continuation = continuation
     }
@@ -148,9 +149,22 @@ public final class AuthStateListenerCoordinator: @unchecked Sendable {
         self.timeoutTimer = timer
         timer.resume()
 
-        // Register initial auth state listener
-        self.listenerHandle = authListenerSource?.registerAuthStateListener { [weak self] hasUser in
+        let source = self.authListenerSource
+        lock.unlock()
+
+        // Register listener OUTSIDE the lock to avoid deadlock if registration calls listener synchronously
+        let handle = source?.registerAuthStateListener { [weak self] hasUser in
             self?.handleAuthStateUpdate(hasUser: hasUser)
+        }
+
+        lock.lock()
+        if isResolved {
+            // Callback or cancellation already fired while registration was occurring; clean up immediately!
+            if let handle = handle, let source = source {
+                source.unregisterAuthStateListener(handle)
+            }
+        } else {
+            self.listenerHandle = handle
         }
         lock.unlock()
     }
@@ -165,6 +179,7 @@ public final class AuthStateListenerCoordinator: @unchecked Sendable {
         cleanupResourcesLocked()
         let cont = continuation
         continuation = nil
+        let completion = onCompletion
         lock.unlock()
 
         if hasUser {
@@ -172,6 +187,7 @@ public final class AuthStateListenerCoordinator: @unchecked Sendable {
         } else {
             cont?.resume(throwing: ThermostatCommandError.signInRequired)
         }
+        completion?()
     }
 
     public func handleTimeout() {
@@ -185,6 +201,7 @@ public final class AuthStateListenerCoordinator: @unchecked Sendable {
         cleanupResourcesLocked()
         let cont = continuation
         continuation = nil
+        let completion = onCompletion
         lock.unlock()
 
         if hasCurrentUser {
@@ -192,6 +209,7 @@ public final class AuthStateListenerCoordinator: @unchecked Sendable {
         } else {
             cont?.resume(throwing: ThermostatCommandError.timedOut)
         }
+        completion?()
     }
 
     public func cancel() {
@@ -204,9 +222,11 @@ public final class AuthStateListenerCoordinator: @unchecked Sendable {
         cleanupResourcesLocked()
         let cont = continuation
         continuation = nil
+        let completion = onCompletion
         lock.unlock()
 
         cont?.resume(throwing: ThermostatCommandError.cancelled)
+        completion?()
     }
 
     private func cleanupResourcesLocked() {
@@ -219,12 +239,13 @@ public final class AuthStateListenerCoordinator: @unchecked Sendable {
     }
 }
 
-/// Thread-safe holder managing cancellation coordination between operation and onCancel handlers.
-/// If cancellation occurs before the coordinator is assigned, any subsequently assigned coordinator is immediately cancelled.
+/// Thread-safe holder managing coordinator lifetime and cancellation.
+/// Retains the coordinator strongly until resolution (callback, timeout, or cancellation),
+/// preventing premature deallocation when the continuation closure scope ends.
 public final class AuthCoordinatorHolder: @unchecked Sendable {
     private let lock = NSLock()
     private var isCancelled = false
-    private weak var coordinator: AuthStateListenerCoordinator?
+    private var coordinator: AuthStateListenerCoordinator?
 
     public init() {}
 
@@ -235,8 +256,17 @@ public final class AuthCoordinatorHolder: @unchecked Sendable {
             coordinator.cancel()
         } else {
             self.coordinator = coordinator
+            coordinator.onCompletion = { [weak self] in
+                self?.clearCoordinator()
+            }
             lock.unlock()
         }
+    }
+
+    public func clearCoordinator() {
+        lock.lock()
+        self.coordinator = nil
+        lock.unlock()
     }
 
     public func cancel() {
@@ -294,9 +324,16 @@ public enum ThermostatFirebaseConfig {
 // MARK: - Native Firebase Auth Provider
 
 #if canImport(FirebaseAuth)
-extension Auth: AuthSessionListenerProtocol {
+/// Dedicated Sendable adapter wrapping Firebase Auth to avoid retroactive unchecked protocol conformance on third-party class.
+public final class FirebaseAuthListenerAdapter: AuthSessionListenerProtocol, @unchecked Sendable {
+    private let auth: Auth
+
+    public init(auth: Auth) {
+        self.auth = auth
+    }
+
     public func registerAuthStateListener(_ listener: @escaping @Sendable (Bool) -> Void) -> AnyObject {
-        let handle = self.addStateDidChangeListener { _, user in
+        let handle = auth.addStateDidChangeListener { _, user in
             listener(user != nil)
         }
         return handle as AnyObject
@@ -304,12 +341,12 @@ extension Auth: AuthSessionListenerProtocol {
 
     public func unregisterAuthStateListener(_ handle: AnyObject) {
         if let authHandle = handle as? AuthStateDidChangeListenerHandle {
-            self.removeStateDidChangeListener(authHandle)
+            auth.removeStateDidChangeListener(authHandle)
         }
     }
 
     public var hasCurrentUser: Bool {
-        return self.currentUser != nil
+        return auth.currentUser != nil
     }
 }
 
@@ -332,9 +369,11 @@ public final class FirebaseAuthSessionProvider: ThermostatAuthSessionProviding {
 
         // Wait for SDK to restore session from Keychain asynchronously
         let holder = AuthCoordinatorHolder()
+        let adapter = FirebaseAuthListenerAdapter(auth: auth)
+
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                let coordinator = AuthStateListenerCoordinator(authListenerSource: auth, continuation: continuation)
+                let coordinator = AuthStateListenerCoordinator(authListenerSource: adapter, continuation: continuation)
                 holder.setCoordinator(coordinator)
                 coordinator.start(timeout: timeout)
             }

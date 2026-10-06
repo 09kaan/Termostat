@@ -144,6 +144,33 @@ final class MockAuthSessionListener: AuthSessionListenerProtocol, @unchecked Sen
     }
 }
 
+/// A mock auth session listener that fires its callback SYNCHRONOUSLY during registration
+final class SynchronousMockAuthSessionListener: AuthSessionListenerProtocol, @unchecked Sendable {
+    private let lock = NSLock()
+    var unregisterCallCount = 0
+    let userResultToReturn: Bool
+
+    init(userResultToReturn: Bool) {
+        self.userResultToReturn = userResultToReturn
+    }
+
+    func registerAuthStateListener(_ listener: @escaping @Sendable (Bool) -> Void) -> AnyObject {
+        // Synchronously invoke callback during registration to test deadlock-free execution
+        listener(userResultToReturn)
+        return "sync-handle" as AnyObject
+    }
+
+    func unregisterAuthStateListener(_ handle: AnyObject) {
+        lock.lock()
+        defer { lock.unlock() }
+        unregisterCallCount += 1
+    }
+
+    var hasCurrentUser: Bool {
+        return userResultToReturn
+    }
+}
+
 // MARK: - Unit Tests
 
 final class ThermostatCommandTests: XCTestCase {
@@ -291,7 +318,7 @@ final class ThermostatCommandTests: XCTestCase {
         }
     }
 
-    // MARK: - Coordinator & Cancellation Holder Tests
+    // MARK: - Coordinator Lifetime, Concurrency & Deadlock Tests
 
     func testAuthCoordinatorHolder_preCancellation_immediatelyCancelsCoordinator() async {
         let holder = AuthCoordinatorHolder()
@@ -313,7 +340,57 @@ final class ThermostatCommandTests: XCTestCase {
             XCTFail("Unexpected error: \(error)")
         }
 
-        XCTAssertEqual(mockSource.unregisterCallCount, 0, "Listener should not even remain registered")
+        XCTAssertEqual(mockSource.unregisterCallCount, 0, "Listener should not remain registered")
+    }
+
+    func testAuthCoordinatorHolder_delayedCallbackAfterContinuationSetupReturns_retainsAndCompletes() async throws {
+        let holder = AuthCoordinatorHolder()
+        let mockSource = MockAuthSessionListener()
+
+        // Asynchronously schedule callback 50ms in the future
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) {
+            mockSource.triggerCallback(hasUser: true)
+        }
+
+        // Holder retains coordinator strongly so continuation completion succeeds after setup scope exits
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let coordinator = AuthStateListenerCoordinator(authListenerSource: mockSource, continuation: continuation)
+            holder.setCoordinator(coordinator)
+            coordinator.start(timeout: 5.0)
+        }
+
+        XCTAssertEqual(mockSource.unregisterCallCount, 1)
+        XCTAssertFalse(mockSource.isListenerRegistered)
+    }
+
+    func testAuthStateListenerCoordinator_synchronousCallback_doesNotDeadlockAndCleansUpHandle() async throws {
+        let syncSource = SynchronousMockAuthSessionListener(userResultToReturn: true)
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let coordinator = AuthStateListenerCoordinator(authListenerSource: syncSource, continuation: continuation)
+            coordinator.start(timeout: 5.0)
+        }
+
+        XCTAssertEqual(syncSource.unregisterCallCount, 1, "Synchronous callback must trigger handle cleanup without deadlock")
+    }
+
+    func testAuthStateListenerCoordinator_timeoutActuallyCompletes() async {
+        let mockSource = MockAuthSessionListener()
+
+        do {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                let coordinator = AuthStateListenerCoordinator(authListenerSource: mockSource, continuation: continuation)
+                // Use a short 0.05s timeout
+                coordinator.start(timeout: 0.05)
+            }
+            XCTFail("Expected timedOut error")
+        } catch let error as ThermostatCommandError {
+            XCTAssertEqual(error, .timedOut)
+            XCTAssertEqual(mockSource.unregisterCallCount, 1)
+            XCTAssertFalse(mockSource.isListenerRegistered)
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
     }
 
     func testAuthStateListenerCoordinator_doubleCallback_resumesOnceAndUnregistersOnce() async throws {
@@ -332,23 +409,35 @@ final class ThermostatCommandTests: XCTestCase {
         XCTAssertFalse(mockSource.isListenerRegistered)
     }
 
-    func testAuthStateListenerCoordinator_timeoutVsCallbackRace_resumesOnceWithoutCrashing() async throws {
+    func testAuthStateListenerCoordinator_timeoutVsCallbackRace_deterministicSingleResolution() async {
         let mockSource = MockAuthSessionListener()
 
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            let coordinator = AuthStateListenerCoordinator(authListenerSource: mockSource, continuation: continuation)
-            coordinator.start(timeout: 5.0)
+        var didComplete = false
+        do {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                let coordinator = AuthStateListenerCoordinator(authListenerSource: mockSource, continuation: continuation)
+                coordinator.start(timeout: 5.0)
 
-            // Race: fire callback and timeout concurrently on two queues
-            DispatchQueue.global().async {
-                coordinator.handleAuthStateUpdate(hasUser: true)
+                // Race: fire callback and timeout concurrently on two queues
+                DispatchQueue.global().async {
+                    coordinator.handleAuthStateUpdate(hasUser: true)
+                }
+                DispatchQueue.global().async {
+                    coordinator.handleTimeout()
+                }
             }
-            DispatchQueue.global().async {
-                coordinator.handleTimeout()
-            }
+            // If callback won the race, it completes with success
+            didComplete = true
+        } catch let error as ThermostatCommandError {
+            // If timeout won the race, it completes with .timedOut
+            XCTAssertEqual(error, .timedOut)
+            didComplete = true
+        } catch {
+            XCTFail("Unexpected error: \(error)")
         }
 
-        XCTAssertEqual(mockSource.unregisterCallCount, 1)
+        XCTAssertTrue(didComplete, "Continuation must resume exactly once")
+        XCTAssertEqual(mockSource.unregisterCallCount, 1, "Listener must be unregistered exactly once")
         XCTAssertFalse(mockSource.isListenerRegistered)
     }
 

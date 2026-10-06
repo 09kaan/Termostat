@@ -1,6 +1,11 @@
+# Codemagic CI Configuration
+# Bu dosya PR ve commit bazlı otomatik birim test (RunnerTests) ve imzasız (unsigned)
+# derleme doğrulamasını gerçekleştirir. TestFlight / Production dağıtımı için kullanılan
+# imzalı (signed) Codemagic iş akışlarının yerine geçmez veya onları engellemez.
+
 workflows:
-  ios-release-and-test:
-    name: iOS Tests and Release Build
+  ios-pr-unsigned-verification:
+    name: iOS CI Tests & Unsigned Release Build
     max_build_duration: 60
     instance_type: mac_mini_m2
     environment:
@@ -11,47 +16,67 @@ workflows:
     scripts:
       - name: Flutter dependencies
         script: |
+          set -euo pipefail
           flutter packages pub get
       - name: CocoaPods dependencies
         script: |
+          set -euo pipefail
           cd ios
           pod install
           cd ..
       - name: Run Dart unit tests
         script: |
+          set -euo pipefail
           flutter test test/thermostat_constants_test.dart
       - name: Run iOS Unit Tests (RunnerTests)
         script: |
-          # Dynamically discover an available iPhone simulator ID
-          SIM_ID=$(xcrun simctl list devices "iPhone" available | grep -v "unavailable" | grep -m 1 "iPhone" | grep -o -E '[0-9A-F]{8}-([0-9A-F]{4}-){3}[0-9A-F]{12}')
-          if [ -z "$SIM_ID" ]; then
-            echo "Searching all available simulator devices..."
-            SIM_ID=$(xcrun simctl list devices available | grep -v "unavailable" | grep -m 1 -o -E '[0-9A-F]{8}-([0-9A-F]{4}-){3}[0-9A-F]{12}')
-          fi
-          if [ -z "$SIM_ID" ]; then
-            echo "Error: No available iOS simulator found in environment."
-            exit 1
-          fi
-          echo "Discovered simulator UDID: $SIM_ID"
-
+          set -euo pipefail
           mkdir -p ios/build
 
+          # Parse xcrun simctl list JSON to select only an available iPhone under an iOS runtime
+          SIMULATOR_ID=$(python3 -c '
+          import json, subprocess, sys
+          try:
+              raw = subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "-j"])
+              data = json.loads(raw)
+              devices_by_runtime = data.get("devices", {})
+              selected = None
+              for runtime, dev_list in devices_by_runtime.items():
+                  if "iOS" in runtime or "com.apple.CoreSimulator.SimRuntime.iOS" in runtime:
+                      for dev in dev_list:
+                          if dev.get("isAvailable", False) and "iPhone" in dev.get("name", ""):
+                              selected = dev.get("udid")
+                              print(f"Found {dev.get(\"name\")} ({selected}) on {runtime}", file=sys.stderr)
+                              break
+                  if selected:
+                      break
+              if not selected:
+                  sys.exit("No available iPhone simulator on iOS runtime found.")
+              print(selected)
+          except Exception as e:
+              sys.exit(f"Error parsing simulator list: {e}")
+          ')
+
+          echo "Selected iOS Simulator UDID: $SIMULATOR_ID"
+
           # Run xcodebuild test for Runner target / RunnerTests
-          # Errors are NOT ignored; failures will properly fail the build
-          set -o pipefail
+          # Both stdout and stderr are piped through tee into xcodebuild_test.log
           xcodebuild test \
             -workspace ios/Runner.xcworkspace \
             -scheme Runner \
-            -destination "platform=iOS Simulator,id=$SIM_ID" \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
             -resultBundlePath ios/build/RunnerTests.xcresult \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            | tee ios/build/xcodebuild_test.log
+            2>&1 | tee ios/build/xcodebuild_test.log
       - name: Build unsigned iOS Release Bundle
         script: |
-          # Unsigned release build for CI verification without exposing private signing certificates/keys
+          set -euo pipefail
           mkdir -p ios/build
-          flutter build ios --release --no-codesign | tee ios/build/flutter_release_build.log
+
+          # Unsigned release build for CI verification without exposing private signing certificates/keys
+          # Both stdout and stderr are piped through tee into flutter_release_build.log
+          flutter build ios --release --no-codesign 2>&1 | tee ios/build/flutter_release_build.log
     artifacts:
       - termostat_app/ios/build/RunnerTests.xcresult
       - termostat_app/ios/build/xcodebuild_test.log

@@ -1,4 +1,4 @@
-# Platform version set to 13.0 for Firebase, geolocator, and geofence compatibility
+# CocoaPods dependency resolution baseline; widget target remains iOS 17 in Xcode.
 platform :ios, '15.0'
 
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
@@ -49,6 +49,11 @@ post_install do |installer|
     flutter_additional_ios_build_settings(target)
     target.build_configurations.each do |config|
       config.build_settings['CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES'] = 'YES'
+      # Firebase does not define our App Intents. Avoid duplicate metadata nodes
+      # for CocoaPods variants during archive. Keep Runner/widget extraction enabled.
+      if target.name.start_with?('FirebaseAuth', 'FirebaseCoreInternal')
+        config.build_settings['LM_SKIP_METADATA_EXTRACTION'] = 'YES'
+      end
       # Only disable modular headers for firebase_database (the problematic pod)
       if target.name == 'firebase_database'
         config.build_settings['DEFINES_MODULE'] = 'NO'

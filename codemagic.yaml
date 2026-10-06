@@ -35,28 +35,28 @@ workflows:
 
           # Parse xcrun simctl list JSON to select only an available iPhone under an iOS runtime
           SIMULATOR_ID=$(python3 -c '
-import json, subprocess, sys
-try:
-    raw = subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "-j"])
-    data = json.loads(raw)
-    devices_by_runtime = data.get("devices", {})
-    selected = None
-    for runtime, dev_list in devices_by_runtime.items():
-        if "iOS" in runtime or "com.apple.CoreSimulator.SimRuntime.iOS" in runtime:
-            for dev in dev_list:
-                if dev.get("isAvailable", False) and "iPhone" in dev.get("name", ""):
-                    device_name = dev.get("name", "")
-                    selected = dev.get("udid")
-                    print(f"Found {device_name} ({selected}) on {runtime}", file=sys.stderr)
-                    break
-        if selected:
-            break
-    if not selected:
-        sys.exit("No available iPhone simulator on iOS runtime found.")
-    print(selected)
-except Exception as e:
-    sys.exit(f"Error parsing simulator list: {e}")
-')
+          import json, subprocess, sys
+          try:
+              raw = subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "-j"])
+              data = json.loads(raw)
+              devices_by_runtime = data.get("devices", {})
+              selected = None
+              for runtime, dev_list in devices_by_runtime.items():
+                  if "iOS" in runtime or "com.apple.CoreSimulator.SimRuntime.iOS" in runtime:
+                      for dev in dev_list:
+                          if dev.get("isAvailable", False) and "iPhone" in dev.get("name", ""):
+                              device_name = dev.get("name", "")
+                              selected = dev.get("udid")
+                              print(f"Found {device_name} ({selected}) on {runtime}", file=sys.stderr)
+                              break
+                  if selected:
+                      break
+              if not selected:
+                  sys.exit("No available iPhone simulator on iOS runtime found.")
+              print(selected)
+          except Exception as e:
+              sys.exit(f"Error parsing simulator list: {e}")
+          ')
 
           echo "Selected iOS Simulator UDID: $SIMULATOR_ID"
 

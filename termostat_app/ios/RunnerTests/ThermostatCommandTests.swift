@@ -105,13 +105,17 @@ final class MockAuthSessionListener: AuthSessionListenerProtocol, @unchecked Sen
     var isListenerRegistered = false
     var unregisterCallCount = 0
     var listenerCallback: (@Sendable (Bool) -> Void)?
+    var onRegistration: (@Sendable () -> Void)?
     var hasCurrentUserValue = false
 
     func registerAuthStateListener(_ listener: @escaping @Sendable (Bool) -> Void) -> AnyObject {
         lock.lock()
-        defer { lock.unlock() }
         isListenerRegistered = true
         self.listenerCallback = listener
+        let regCallback = onRegistration
+        lock.unlock()
+
+        regCallback?()
         return "mock-auth-handle" as AnyObject
     }
 
@@ -323,6 +327,7 @@ final class ThermostatCommandTests: XCTestCase {
     func testAuthCoordinatorHolder_preCancellation_immediatelyCancelsCoordinator() async {
         let holder = AuthCoordinatorHolder()
         let mockSource = MockAuthSessionListener()
+        defer { holder.clearCoordinator() }
 
         // Cancel holder BEFORE coordinator is assigned
         holder.cancel()
@@ -346,10 +351,13 @@ final class ThermostatCommandTests: XCTestCase {
     func testAuthCoordinatorHolder_delayedCallbackAfterContinuationSetupReturns_retainsAndCompletes() async throws {
         let holder = AuthCoordinatorHolder()
         let mockSource = MockAuthSessionListener()
+        defer { holder.clearCoordinator() }
 
-        // Asynchronously schedule callback 50ms in the future
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) {
-            mockSource.triggerCallback(hasUser: true)
+        // Trigger delayed callback strictly after listener registration has completed
+        mockSource.onRegistration = {
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) {
+                mockSource.triggerCallback(hasUser: true)
+            }
         }
 
         // Holder retains coordinator strongly so continuation completion succeeds after setup scope exits
@@ -365,9 +373,12 @@ final class ThermostatCommandTests: XCTestCase {
 
     func testAuthStateListenerCoordinator_synchronousCallback_doesNotDeadlockAndCleansUpHandle() async throws {
         let syncSource = SynchronousMockAuthSessionListener(userResultToReturn: true)
+        let holder = AuthCoordinatorHolder()
+        defer { holder.clearCoordinator() }
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let coordinator = AuthStateListenerCoordinator(authListenerSource: syncSource, continuation: continuation)
+            holder.setCoordinator(coordinator)
             coordinator.start(timeout: 5.0)
         }
 
@@ -376,10 +387,13 @@ final class ThermostatCommandTests: XCTestCase {
 
     func testAuthStateListenerCoordinator_timeoutActuallyCompletes() async {
         let mockSource = MockAuthSessionListener()
+        let holder = AuthCoordinatorHolder()
+        defer { holder.clearCoordinator() }
 
         do {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 let coordinator = AuthStateListenerCoordinator(authListenerSource: mockSource, continuation: continuation)
+                holder.setCoordinator(coordinator)
                 // Use a short 0.05s timeout
                 coordinator.start(timeout: 0.05)
             }
@@ -395,9 +409,12 @@ final class ThermostatCommandTests: XCTestCase {
 
     func testAuthStateListenerCoordinator_doubleCallback_resumesOnceAndUnregistersOnce() async throws {
         let mockSource = MockAuthSessionListener()
+        let holder = AuthCoordinatorHolder()
+        defer { holder.clearCoordinator() }
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let coordinator = AuthStateListenerCoordinator(authListenerSource: mockSource, continuation: continuation)
+            holder.setCoordinator(coordinator)
             coordinator.start(timeout: 5.0)
 
             // Trigger callback twice
@@ -411,11 +428,14 @@ final class ThermostatCommandTests: XCTestCase {
 
     func testAuthStateListenerCoordinator_timeoutVsCallbackRace_deterministicSingleResolution() async {
         let mockSource = MockAuthSessionListener()
+        let holder = AuthCoordinatorHolder()
+        defer { holder.clearCoordinator() }
 
         var didComplete = false
         do {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 let coordinator = AuthStateListenerCoordinator(authListenerSource: mockSource, continuation: continuation)
+                holder.setCoordinator(coordinator)
                 coordinator.start(timeout: 5.0)
 
                 // Race: fire callback and timeout concurrently on two queues
@@ -426,10 +446,8 @@ final class ThermostatCommandTests: XCTestCase {
                     coordinator.handleTimeout()
                 }
             }
-            // If callback won the race, it completes with success
             didComplete = true
         } catch let error as ThermostatCommandError {
-            // If timeout won the race, it completes with .timedOut
             XCTAssertEqual(error, .timedOut)
             didComplete = true
         } catch {
@@ -444,9 +462,13 @@ final class ThermostatCommandTests: XCTestCase {
     func testAuthStateListenerCoordinator_listenerCleanup_onFailureAndCancellation() async {
         // Test failure path
         let mockSource1 = MockAuthSessionListener()
+        let holder1 = AuthCoordinatorHolder()
+        defer { holder1.clearCoordinator() }
+
         do {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 let coordinator = AuthStateListenerCoordinator(authListenerSource: mockSource1, continuation: continuation)
+                holder1.setCoordinator(coordinator)
                 coordinator.start(timeout: 5.0)
                 mockSource1.triggerCallback(hasUser: false)
             }
@@ -461,9 +483,13 @@ final class ThermostatCommandTests: XCTestCase {
 
         // Test cancel path
         let mockSource2 = MockAuthSessionListener()
+        let holder2 = AuthCoordinatorHolder()
+        defer { holder2.clearCoordinator() }
+
         do {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
                 let coordinator = AuthStateListenerCoordinator(authListenerSource: mockSource2, continuation: continuation)
+                holder2.setCoordinator(coordinator)
                 coordinator.start(timeout: 5.0)
                 coordinator.cancel()
             }

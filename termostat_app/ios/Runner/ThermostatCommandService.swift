@@ -84,7 +84,22 @@ public protocol HTTPRequestPerforming: Sendable {
 
 extension URLSession: HTTPRequestPerforming {
     public func performData(for request: URLRequest) async throws -> (Data, URLResponse) {
-        return try await self.data(for: request)
+        if #available(iOS 15.0, *) {
+            return try await self.data(for: request)
+        } else {
+            return try await withCheckedThrowingContinuation { continuation in
+                let task = self.dataTask(with: request) { data, response, error in
+                    if let error = error {
+                        continuation.resume(throwing: error)
+                    } else if let data = data, let response = response {
+                        continuation.resume(returning: (data, response))
+                    } else {
+                        continuation.resume(throwing: URLError(.badServerResponse))
+                    }
+                }
+                task.resume()
+            }
+        }
     }
 }
 
@@ -95,12 +110,157 @@ public protocol ThermostatAuthSessionProviding: Sendable {
     func getValidIDToken(forcingRefresh: Bool) async throws -> String
 }
 
+public protocol AuthSessionListenerProtocol: AnyObject, @unchecked Sendable {
+    func registerAuthStateListener(_ listener: @escaping @Sendable (Bool) -> Void) -> AnyObject
+    func unregisterAuthStateListener(_ handle: AnyObject)
+    var hasCurrentUser: Bool { get }
+}
+
+// MARK: - Auth State Listener Coordinator & Cancellation Holder
+
+/// Thread-safe coordinator for the initial Auth state listener.
+public final class AuthStateListenerCoordinator: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isResolved = false
+    private var listenerHandle: AnyObject?
+    private var timeoutTimer: DispatchSourceTimer?
+    private var continuation: CheckedContinuation<Void, Error>?
+    private weak var authListenerSource: AuthSessionListenerProtocol?
+
+    public init(authListenerSource: AuthSessionListenerProtocol, continuation: CheckedContinuation<Void, Error>) {
+        self.authListenerSource = authListenerSource
+        self.continuation = continuation
+    }
+
+    public func start(timeout: TimeInterval) {
+        lock.lock()
+        guard !isResolved else {
+            lock.unlock()
+            return
+        }
+
+        // Configure timeout timer on global queue
+        let timer = DispatchSourceTimer.makeTimerSource(queue: DispatchQueue.global(qos: .userInitiated))
+        timer.schedule(deadline: .now() + timeout)
+        timer.setEventHandler { [weak self] in
+            self?.handleTimeout()
+        }
+        self.timeoutTimer = timer
+        timer.resume()
+
+        // Register initial auth state listener
+        self.listenerHandle = authListenerSource?.registerAuthStateListener { [weak self] hasUser in
+            self?.handleAuthStateUpdate(hasUser: hasUser)
+        }
+        lock.unlock()
+    }
+
+    public func handleAuthStateUpdate(hasUser: Bool) {
+        lock.lock()
+        guard !isResolved else {
+            lock.unlock()
+            return
+        }
+        isResolved = true
+        cleanupResourcesLocked()
+        let cont = continuation
+        continuation = nil
+        lock.unlock()
+
+        if hasUser {
+            cont?.resume()
+        } else {
+            cont?.resume(throwing: ThermostatCommandError.signInRequired)
+        }
+    }
+
+    public func handleTimeout() {
+        lock.lock()
+        guard !isResolved else {
+            lock.unlock()
+            return
+        }
+        isResolved = true
+        let hasCurrentUser = authListenerSource?.hasCurrentUser ?? false
+        cleanupResourcesLocked()
+        let cont = continuation
+        continuation = nil
+        lock.unlock()
+
+        if hasCurrentUser {
+            cont?.resume()
+        } else {
+            cont?.resume(throwing: ThermostatCommandError.timedOut)
+        }
+    }
+
+    public func cancel() {
+        lock.lock()
+        guard !isResolved else {
+            lock.unlock()
+            return
+        }
+        isResolved = true
+        cleanupResourcesLocked()
+        let cont = continuation
+        continuation = nil
+        lock.unlock()
+
+        cont?.resume(throwing: ThermostatCommandError.cancelled)
+    }
+
+    private func cleanupResourcesLocked() {
+        if let handle = listenerHandle, let source = authListenerSource {
+            source.unregisterAuthStateListener(handle)
+            self.listenerHandle = nil
+        }
+        timeoutTimer?.cancel()
+        timeoutTimer = nil
+    }
+}
+
+/// Thread-safe holder managing cancellation coordination between operation and onCancel handlers.
+/// If cancellation occurs before the coordinator is assigned, any subsequently assigned coordinator is immediately cancelled.
+public final class AuthCoordinatorHolder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isCancelled = false
+    private weak var coordinator: AuthStateListenerCoordinator?
+
+    public init() {}
+
+    public func setCoordinator(_ coordinator: AuthStateListenerCoordinator) {
+        lock.lock()
+        if isCancelled {
+            lock.unlock()
+            coordinator.cancel()
+        } else {
+            self.coordinator = coordinator
+            lock.unlock()
+        }
+    }
+
+    public func cancel() {
+        lock.lock()
+        isCancelled = true
+        let coord = coordinator
+        self.coordinator = nil
+        lock.unlock()
+        coord?.cancel()
+    }
+}
+
 // MARK: - Firebase Configuration Helper
 
 #if canImport(FirebaseCore)
 public enum ThermostatFirebaseConfig {
+    private static let configureLock = NSLock()
+
     /// Safely returns existing FirebaseApp or configures it once from GoogleService-Info.plist.
+    /// Serialized via NSLock to eliminate check-then-configure race conditions.
     public static func configuredFirebaseApp() throws -> FirebaseApp {
+        configureLock.lock()
+        defer { configureLock.unlock() }
+
         if let existing = FirebaseApp.app() {
             return existing
         }
@@ -133,108 +293,27 @@ public enum ThermostatFirebaseConfig {
 
 // MARK: - Native Firebase Auth Provider
 
-#if canImport(FirebaseAuth) && canImport(FirebaseCore)
-/// Thread-safe coordinator for the initial Auth state listener.
-private final class AuthStateListenerCoordinator: @unchecked Sendable {
-    private let lock = NSLock()
-    private var isResolved = false
-    private var listenerHandle: AuthStateDidChangeListenerHandle?
-    private var timeoutTimer: DispatchSourceTimer?
-    private var continuation: CheckedContinuation<Void, Error>?
-    private weak var auth: Auth?
-
-    init(auth: Auth, continuation: CheckedContinuation<Void, Error>) {
-        self.auth = auth
-        self.continuation = continuation
+#if canImport(FirebaseAuth)
+extension Auth: AuthSessionListenerProtocol {
+    public func registerAuthStateListener(_ listener: @escaping @Sendable (Bool) -> Void) -> AnyObject {
+        let handle = self.addStateDidChangeListener { _, user in
+            listener(user != nil)
+        }
+        return handle as AnyObject
     }
 
-    func start(timeout: TimeInterval) {
-        lock.lock()
-        guard !isResolved else {
-            lock.unlock()
-            return
-        }
-
-        // Configure timeout timer on global queue
-        let timer = DispatchSourceTimer.makeTimerSource(queue: DispatchQueue.global(qos: .userInitiated))
-        timer.schedule(deadline: .now() + timeout)
-        timer.setEventHandler { [weak self] in
-            self?.handleTimeout()
-        }
-        self.timeoutTimer = timer
-        timer.resume()
-
-        // Register initial auth state listener
-        self.listenerHandle = auth?.addStateDidChangeListener { [weak self] (_, user) in
-            self?.handleAuthStateUpdate(user: user)
-        }
-        lock.unlock()
-    }
-
-    private func handleAuthStateUpdate(user: User?) {
-        lock.lock()
-        guard !isResolved else {
-            lock.unlock()
-            return
-        }
-        isResolved = true
-        cleanupResourcesLocked()
-        let cont = continuation
-        continuation = nil
-        lock.unlock()
-
-        if user != nil {
-            cont?.resume()
-        } else {
-            cont?.resume(throwing: ThermostatCommandError.signInRequired)
+    public func unregisterAuthStateListener(_ handle: AnyObject) {
+        if let authHandle = handle as? AuthStateDidChangeListenerHandle {
+            self.removeStateDidChangeListener(authHandle)
         }
     }
 
-    private func handleTimeout() {
-        lock.lock()
-        guard !isResolved else {
-            lock.unlock()
-            return
-        }
-        isResolved = true
-        let hasCurrentUser = (auth?.currentUser != nil)
-        cleanupResourcesLocked()
-        let cont = continuation
-        continuation = nil
-        lock.unlock()
-
-        if hasCurrentUser {
-            cont?.resume()
-        } else {
-            cont?.resume(throwing: ThermostatCommandError.timedOut)
-        }
-    }
-
-    func cancel() {
-        lock.lock()
-        guard !isResolved else {
-            lock.unlock()
-            return
-        }
-        isResolved = true
-        cleanupResourcesLocked()
-        let cont = continuation
-        continuation = nil
-        lock.unlock()
-
-        cont?.resume(throwing: ThermostatCommandError.cancelled)
-    }
-
-    private func cleanupResourcesLocked() {
-        if let handle = listenerHandle, let auth = auth {
-            auth.removeStateDidChangeListener(handle)
-            self.listenerHandle = nil
-        }
-        timeoutTimer?.cancel()
-        timeoutTimer = nil
+    public var hasCurrentUser: Bool {
+        return self.currentUser != nil
     }
 }
 
+#if canImport(FirebaseCore)
 public final class FirebaseAuthSessionProvider: ThermostatAuthSessionProviding {
     private let appResolver: @Sendable () throws -> FirebaseApp
 
@@ -252,15 +331,15 @@ public final class FirebaseAuthSessionProvider: ThermostatAuthSessionProviding {
         }
 
         // Wait for SDK to restore session from Keychain asynchronously
-        var coordinatorRef: AuthStateListenerCoordinator?
+        let holder = AuthCoordinatorHolder()
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                let coordinator = AuthStateListenerCoordinator(auth: auth, continuation: continuation)
-                coordinatorRef = coordinator
+                let coordinator = AuthStateListenerCoordinator(authListenerSource: auth, continuation: continuation)
+                holder.setCoordinator(coordinator)
                 coordinator.start(timeout: timeout)
             }
         } onCancel: {
-            coordinatorRef?.cancel()
+            holder.cancel()
         }
     }
 
@@ -298,6 +377,7 @@ public final class FirebaseAuthSessionProvider: ThermostatAuthSessionProviding {
         }
     }
 }
+#endif
 #endif
 
 // MARK: - Main Command Service

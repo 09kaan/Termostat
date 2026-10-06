@@ -2,6 +2,16 @@ import XCTest
 import Foundation
 @testable import Runner
 
+// MARK: - Mocks
+
+public struct TokenRequest: Equatable, Sendable {
+    public let forcingRefresh: Bool
+
+    public init(forcingRefresh: Bool) {
+        self.forcingRefresh = forcingRefresh
+    }
+}
+
 final class MockHTTPRequestPerformer: HTTPRequestPerforming, @unchecked Sendable {
     private let lock = NSLock()
     var requests: [URLRequest] = []
@@ -60,7 +70,7 @@ final class MockAuthSessionProvider: ThermostatAuthSessionProviding, @unchecked 
     var shouldFailAuthWait: Error?
     var authWaitDelayNanoseconds: UInt64 = 0
     var tokensToReturn: [String] = ["mock-token-1", "mock-token-refreshed"]
-    var tokenRequests: [(forcingRefresh: Bool)] = []
+    var tokenRequests: [TokenRequest] = []
     var ensureAuthCalled = false
 
     func ensureUserAuthenticated(timeout: TimeInterval) async throws {
@@ -82,13 +92,59 @@ final class MockAuthSessionProvider: ThermostatAuthSessionProviding, @unchecked 
     func getValidIDToken(forcingRefresh: Bool) async throws -> String {
         lock.lock()
         defer { lock.unlock() }
-        tokenRequests.append((forcingRefresh: forcingRefresh))
+        tokenRequests.append(TokenRequest(forcingRefresh: forcingRefresh))
         if tokensToReturn.isEmpty {
             return "mock-token-fallback"
         }
         return tokensToReturn.removeFirst()
     }
 }
+
+final class MockAuthSessionListener: AuthSessionListenerProtocol, @unchecked Sendable {
+    private let lock = NSLock()
+    var isListenerRegistered = false
+    var unregisterCallCount = 0
+    var listenerCallback: (@Sendable (Bool) -> Void)?
+    var hasCurrentUserValue = false
+
+    func registerAuthStateListener(_ listener: @escaping @Sendable (Bool) -> Void) -> AnyObject {
+        lock.lock()
+        defer { lock.unlock() }
+        isListenerRegistered = true
+        self.listenerCallback = listener
+        return "mock-auth-handle" as AnyObject
+    }
+
+    func unregisterAuthStateListener(_ handle: AnyObject) {
+        lock.lock()
+        defer { lock.unlock() }
+        isListenerRegistered = false
+        unregisterCallCount += 1
+        self.listenerCallback = nil
+    }
+
+    var hasCurrentUser: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return hasCurrentUserValue
+    }
+
+    func setHasCurrentUser(_ value: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        hasCurrentUserValue = value
+    }
+
+    func triggerCallback(hasUser: Bool) {
+        let cb: (@Sendable (Bool) -> Void)?
+        lock.lock()
+        cb = listenerCallback
+        lock.unlock()
+        cb?(hasUser)
+    }
+}
+
+// MARK: - Unit Tests
 
 final class ThermostatCommandTests: XCTestCase {
     private let validDatabaseURL = "https://termometer-4b9d6-default-rtdb.europe-west1.firebasedatabase.app"
@@ -230,6 +286,103 @@ final class ThermostatCommandTests: XCTestCase {
         } catch let error as ThermostatCommandError {
             XCTAssertEqual(error, .timedOut)
             XCTAssertEqual(mockTransport.requestCount, 0)
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    // MARK: - Coordinator & Cancellation Holder Tests
+
+    func testAuthCoordinatorHolder_preCancellation_immediatelyCancelsCoordinator() async {
+        let holder = AuthCoordinatorHolder()
+        let mockSource = MockAuthSessionListener()
+
+        // Cancel holder BEFORE coordinator is assigned
+        holder.cancel()
+
+        do {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                let coordinator = AuthStateListenerCoordinator(authListenerSource: mockSource, continuation: continuation)
+                holder.setCoordinator(coordinator)
+                coordinator.start(timeout: 5.0)
+            }
+            XCTFail("Expected cancelled error")
+        } catch let error as ThermostatCommandError {
+            XCTAssertEqual(error, .cancelled)
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+
+        XCTAssertEqual(mockSource.unregisterCallCount, 0, "Listener should not even remain registered")
+    }
+
+    func testAuthStateListenerCoordinator_doubleCallback_resumesOnceAndUnregistersOnce() async throws {
+        let mockSource = MockAuthSessionListener()
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let coordinator = AuthStateListenerCoordinator(authListenerSource: mockSource, continuation: continuation)
+            coordinator.start(timeout: 5.0)
+
+            // Trigger callback twice
+            mockSource.triggerCallback(hasUser: true)
+            mockSource.triggerCallback(hasUser: true)
+        }
+
+        XCTAssertEqual(mockSource.unregisterCallCount, 1, "Unregister must be called exactly once")
+        XCTAssertFalse(mockSource.isListenerRegistered)
+    }
+
+    func testAuthStateListenerCoordinator_timeoutVsCallbackRace_resumesOnceWithoutCrashing() async throws {
+        let mockSource = MockAuthSessionListener()
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let coordinator = AuthStateListenerCoordinator(authListenerSource: mockSource, continuation: continuation)
+            coordinator.start(timeout: 5.0)
+
+            // Race: fire callback and timeout concurrently on two queues
+            DispatchQueue.global().async {
+                coordinator.handleAuthStateUpdate(hasUser: true)
+            }
+            DispatchQueue.global().async {
+                coordinator.handleTimeout()
+            }
+        }
+
+        XCTAssertEqual(mockSource.unregisterCallCount, 1)
+        XCTAssertFalse(mockSource.isListenerRegistered)
+    }
+
+    func testAuthStateListenerCoordinator_listenerCleanup_onFailureAndCancellation() async {
+        // Test failure path
+        let mockSource1 = MockAuthSessionListener()
+        do {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                let coordinator = AuthStateListenerCoordinator(authListenerSource: mockSource1, continuation: continuation)
+                coordinator.start(timeout: 5.0)
+                mockSource1.triggerCallback(hasUser: false)
+            }
+            XCTFail("Expected signInRequired")
+        } catch let error as ThermostatCommandError {
+            XCTAssertEqual(error, .signInRequired)
+            XCTAssertEqual(mockSource1.unregisterCallCount, 1)
+            XCTAssertFalse(mockSource1.isListenerRegistered)
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+
+        // Test cancel path
+        let mockSource2 = MockAuthSessionListener()
+        do {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                let coordinator = AuthStateListenerCoordinator(authListenerSource: mockSource2, continuation: continuation)
+                coordinator.start(timeout: 5.0)
+                coordinator.cancel()
+            }
+            XCTFail("Expected cancelled")
+        } catch let error as ThermostatCommandError {
+            XCTAssertEqual(error, .cancelled)
+            XCTAssertEqual(mockSource2.unregisterCallCount, 1)
+            XCTAssertFalse(mockSource2.isListenerRegistered)
         } catch {
             XCTFail("Unexpected error: \(error)")
         }

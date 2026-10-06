@@ -138,15 +138,16 @@ Daha önceden tanımlanmış deep-link kestirmeleriniz varsa:
 
 ## 5. Kilit Ekranı, Güvenlik ve Keychain Mimarisi
 
-Kilit ekranında çalışma durumu hakkında teknik detaylar ve sınırlamalar:
+Kilit ekranında çalışma durumu hakkında teknik detaylar, SDK kaynak davranışları ve sınırlamalar:
 
 ### A. `.alwaysAllowed` Ne Yapar, Ne Yapmaz?
-`HeatingOnIntent` içinde `authenticationPolicy = .alwaysAllowed` tanımlanmıştır. Bu ayar, iOS'a *"Kullanıcı bu eylemi kilit ekranında tetiklediğinde cihaz kilidini açmasını isteme, arka planda eylemi çalıştır"* talimatı verir.
+`HeatingOnIntent` içinde `authenticationPolicy = .alwaysAllowed` tanımlanmıştır. Bu ayar, iOS'a *"Kullanıcı bu eylemi kilit ekranında tetiklediğinde sistem varsayılanı olarak kilit açma penceresi çıkarma, arka planda çalıştırmayı dene"* talimatı verir. Ancak bu ayar tek başına Keychain şifrelemesini veya iOS güvenlik kısıtlamalarını aşamaz.
 
-### B. Keychain Erişim Sınırlaması (`kSecAttrAccessibleAfterFirstUnlock`)
-Firebase iOS SDK, oturum ve kimlik token'larını cihazın Güvenli Bölgesi'nde (Keychain) saklar. Firebase SDK'nın varsayılan erişim seviyesi `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`'dir.
-- **Normal Kilitli Durum (Çalışır):** Telefon açılıp kullanıcı PIN/FaceID ile kilidi **en az bir kez** açtıktan sonra, ekran kilitlense bile Keychain verileri bellekte şifresi çözülmüş olarak kalır. Bu sayede telefon kilitliyken Siri kestirmesi çalışır, Firebase token'ı başarıyla okunur ve komut gönderilir.
-- **Yeniden Başlatma Sonrası Kilitli Durum (İlk Kilit Açılmadan Önce - BFU):** Telefon yeni yeniden başlatılmışsa ve kullanıcı henüz bir kez bile PIN girmemişse (Before First Unlock), donanımsal şifreleme anahtarları henüz çözülmemiştir. Hiçbir uygulama Keychain'e erişemez. Bu durumda komut çalışmaz ve giriş yapılması veya kilidin bir kez açılması gerekir.
+### B. Firebase iOS SDK Keychain Davranışı (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`)
+Firebase iOS SDK kaynak kodunda (`FIRAuthKeychainServices`), kullanıcı kimlik bilgileri ve refresh token'ları iOS Keychain'inde varsayılan olarak `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` erişim özniteliğiyle saklanır.
+- **Yeniden Başlatma Sonrası Kilitli Durum (İlk Kilit Açılmadan Önce - BFU):** Telefon yeniden başlatıldıktan sonra kullanıcı henüz bir kez bile PIN/FaceID girmemişse, Keychain verileri donanımsal Secure Enclave anahtarlarıyla şifrelidir. Bu durumda hiçbir arka plan süreci token okuyamaz; komut başarısız olur ve kilit açılması gerekir.
+- **İlk Kilit Açıldıktan Sonraki Kilitli Durum (AFU):** Kullanıcı cihaz kilidini en az bir kez açtıktan sonra `AfterFirstUnlock` verileri bellekte erişilebilir kalır. Ancak kilitliyken AppIntent'in arka planda çalışıp çalışmayacağı; iOS sürümü, Siri'nin "Kilitliyken Siri'ye İzin Ver" ayarı, kurumsal cihaz yönetimi (MDM) profilleri ve sistemin bellek/güç politikalarına bağlıdır.
+- **ÖNEMLİ UYARI:** Kilit ekranında arka planda çalışma konusunda **mutlak bir garanti verilemez**. Bu ortamda (Windows / CI) fiziksel bir iPhone cihazı üzerinde kilit ekranı testi **YAPILMAMIŞTIR**. Bu senaryolar mutlaka gerçek cihazda doğrulanmalıdır.
 
 ---
 
@@ -158,20 +159,9 @@ Projenin eski kodlarında (`AppDelegate.swift` geofence ve ESP kodları) `fireba
 - **Log Güvenliği:** Auth query parametresi, ID token veya hassas ağ yanıtları hiçbir log kaydında açık olarak yazdırılmaz.
 
 ### B. Firebase Realtime Database Güvenlik Kuralları
-Veritabanınızda `.write: true` veya sadece `auth != null` gibi genel kurallar kullanılması güvenli değildir. Üretim ortamında cihaz bazlı sahiplik kuralları tanımlanmalıdır:
-
-```json
-{
-  "rules": {
-    "devices": {
-      "$deviceId": {
-        ".read": "auth != null",
-        ".write": "auth != null && (root.child('device_owners').child($deviceId).child(auth.uid).val() === true || $deviceId === 'device1')"
-      }
-    }
-  }
-}
-```
+- **Genel `auth != null` Önerilmez:** Sadece `auth != null` tanımlamak, projedeki herhangi bir giriş yapmış kullanıcının projedeki tüm cihazları değiştirmesine izin verir ve güvenlik açığı oluşturur.
+- **Varsayımsal Sahiplik Şeması Uygulanmamalıdır:** Bu kod deposunda kullanıcı-cihaz sahiplik şeması (örneğin kullanıcıların hangi cihazlara erişebileceğini tutan veritabanı düğümü) bulunmamaktadır. Dolayısıyla `device1` gibi sabit bypass'lar (`|| $deviceId === 'device1'`) güvenliği ihlal eder ve kaldırılmıştır.
+- **Yönetici Sorumluluğu:** Firebase proje yöneticisi, üretim ortamına geçmeden önce kendi veritabanı şemasına uygun cihaz bazlı sahiplik/yetkilendirme kuralını (örneğin `root.child('user_devices').child(auth.uid).child($deviceId).exists()`) Firebase Console üzerinde kendisi tanımlamalıdır.
 
 ### C. Sabit Database Secret'ın Rotasyonu / İptali (Yönetici İşleri)
 Eski `firebaseSecret` anahtarını iptal etmek Firebase Console üzerinden yöneticinin yapması gereken bir işlemdir:
@@ -198,15 +188,15 @@ Eski `firebaseSecret` anahtarını iptal etmek Firebase Console üzerinden yöne
 
 ## 8. Gerçek Cihaz Test Matrisi
 
-Aşağıdaki matris, Release/TestFlight sürümünde oturum açmış kullanıcı ile fiziksel iPhone üzerinde test edilmelidir:
+> **DİKKAT:** Aşağıdaki matris henüz gerçek bir fiziksel cihaz üzerinde test **EDİLMEMİŞTİR**. Bu tablo, Codemagic/Xcode derlemesinden sonra Release veya TestFlight sürümünde bir iPhone üzerinde manuel olarak koşulması gereken test planıdır.
 
 | # | Test Senaryosu | Beklenen Davranış | Doğrulama Yöntemi |
 |---|---|---|---|
 | **1** | Uygulama açık / Telefon kilitsiz | Siri eylemi çalışır, ekran değişmez, komut Firebase'e yazılır (mode=on, temp=25). | Firebase Console'dan veriyi gözlemleyin. |
 | **2** | Uygulama arka planda / Telefon kilitsiz | Siri eylemi çalışır, uygulama ön plana GELMEZ, komut yazılır. | Siri "komut gönderildi" yanıtı verir. |
-| **3** | Uygulama arka planda / Telefon kilitli | Siri kilit açma istemeden çalışır, ekran açılmaz, komut yazılır. | Ekran kilitliyken "Isıtmayı aç" deyin. |
-| **4** | Uygulama kapalı (Killed) / Telefon kilitli | Uygulama arayüzü açılmaz, arka planda process ayağa kalkar, komut başarıyla gider. | App Switcher'dan uygulamayı yukarı kaydırıp kapatın, kilitli test edin. |
-| **5** | Telefon yeniden başlatılmış (İlk kilit açılmış, sonra kilitlenmiş) | Keychain açıktır; Siri komutu sorunsuz iletir. | Telefonu yeniden başlatın, PIN girin, kilitleyin ve test edin. |
+| **3** | Uygulama arka planda / Telefon kilitli | Siri kilit açma istemeden çalışır (cihaz izin verirse), ekran açılmaz, komut yazılır. | Ekran kilitliyken "Isıtmayı aç" deyin. |
+| **4** | Uygulama kapalı (Killed) / Telefon kilitli | Uygulama arayüzü açılmaz, arka planda process ayağa kalkar, komut gönderilir. | App Switcher'dan uygulamayı yukarı kaydırıp kapatın, kilitli test edin. |
+| **5** | Telefon yeniden başlatılmış (İlk kilit açılmış, sonra kilitlenmiş - AFU) | Keychain açıktır; Siri komutu iletmeyi dener. | Telefonu yeniden başlatın, PIN girin, kilitleyin ve test edin. |
 | **6** | Telefon yeniden başlatılmış (Henüz HİÇ kilit açılmamış - BFU) | Keychain şifrelidir; Siri kilit açılmasını ister veya oturum hatası verir. | Yeniden başlatın, PIN girmeden Siri'yi tetikleyin. |
 | **7** | İnternet bağlantısı yok (Uçak Modu) | Hata döner: "İnternet bağlantısı kurulamadı." Başarı yanıtı VERİLMEZ. | Uçak modunu açıp test edin. |
 | **8** | Token süresi dolmuş | Servis HTTP 401 alır, otomatik bir kez token yeniler, komut başarıyla tamamlanır. | Eski token senaryosunda otomatik yenilemeyi doğrulayın. |

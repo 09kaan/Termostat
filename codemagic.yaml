@@ -1,0 +1,59 @@
+workflows:
+  ios-release-and-test:
+    name: iOS Tests and Release Build
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+    working_directory: termostat_app
+    scripts:
+      - name: Flutter dependencies
+        script: |
+          flutter packages pub get
+      - name: CocoaPods dependencies
+        script: |
+          cd ios
+          pod install
+          cd ..
+      - name: Run Dart unit tests
+        script: |
+          flutter test test/thermostat_constants_test.dart
+      - name: Run iOS Unit Tests (RunnerTests)
+        script: |
+          # Dynamically discover an available iPhone simulator ID
+          SIM_ID=$(xcrun simctl list devices "iPhone" available | grep -v "unavailable" | grep -m 1 "iPhone" | grep -o -E '[0-9A-F]{8}-([0-9A-F]{4}-){3}[0-9A-F]{12}')
+          if [ -z "$SIM_ID" ]; then
+            echo "Searching all available simulator devices..."
+            SIM_ID=$(xcrun simctl list devices available | grep -v "unavailable" | grep -m 1 -o -E '[0-9A-F]{8}-([0-9A-F]{4}-){3}[0-9A-F]{12}')
+          fi
+          if [ -z "$SIM_ID" ]; then
+            echo "Error: No available iOS simulator found in environment."
+            exit 1
+          fi
+          echo "Discovered simulator UDID: $SIM_ID"
+
+          mkdir -p ios/build
+
+          # Run xcodebuild test for Runner target / RunnerTests
+          # Errors are NOT ignored; failures will properly fail the build
+          set -o pipefail
+          xcodebuild test \
+            -workspace ios/Runner.xcworkspace \
+            -scheme Runner \
+            -destination "platform=iOS Simulator,id=$SIM_ID" \
+            -resultBundlePath ios/build/RunnerTests.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            | tee ios/build/xcodebuild_test.log
+      - name: Build unsigned iOS Release Bundle
+        script: |
+          # Unsigned release build for CI verification without exposing private signing certificates/keys
+          mkdir -p ios/build
+          flutter build ios --release --no-codesign | tee ios/build/flutter_release_build.log
+    artifacts:
+      - termostat_app/ios/build/RunnerTests.xcresult
+      - termostat_app/ios/build/xcodebuild_test.log
+      - termostat_app/ios/build/flutter_release_build.log
+      - termostat_app/build/ios/iphoneos/*.app

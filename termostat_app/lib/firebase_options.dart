@@ -76,12 +76,12 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions ios = FirebaseOptions(
     apiKey: 'AIzaSyCn7RN1-IL2qL4ZWqnlX8X8M_FJG2AJrvA',
-    appId: '1:146412174490:ios:ed6799eaf94672ed98f323',
+    appId: '1:146412174490:ios:9a5693d706b010df98f323',
     messagingSenderId: '146412174490',
     projectId: 'termometer-4b9d6',
     databaseURL: 'https://termometer-4b9d6-default-rtdb.europe-west1.firebasedatabase.app',
-    storageBucket: 'termometer-4b9d6.appspot.com',
+    storageBucket: 'termometer-4b9d6.firebasestorage.app',
     iosBundleId: 'com.example.termostatApp',
-);
+  );
 
 }

@@ -141,7 +141,7 @@ public final class AuthStateListenerCoordinator: @unchecked Sendable {
         }
 
         // Configure timeout timer on global queue
-        let timer = DispatchSourceTimer.makeTimerSource(queue: DispatchQueue.global(qos: .userInitiated))
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .userInitiated))
         timer.schedule(deadline: .now() + timeout)
         timer.setEventHandler { [weak self] in
             self?.handleTimeout()
@@ -401,7 +401,7 @@ public final class FirebaseAuthSessionProvider: ThermostatAuthSessionProviding {
                 }
             }
             if err.domain == AuthErrorDomain {
-                if let code = AuthErrorCode.Code(rawValue: err.code) {
+                if let code = AuthErrorCode(rawValue: err.code) {
                     switch code {
                     case .networkError:
                         throw ThermostatCommandError.networkUnavailable

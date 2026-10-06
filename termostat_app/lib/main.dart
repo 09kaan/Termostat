@@ -13,6 +13,7 @@ import 'providers/weather_provider.dart';
 import 'providers/auth_provider.dart';
 import 'screens/settings_screen.dart';
 import 'services/notifications_service.dart';
+import 'services/widget_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -20,6 +21,8 @@ void main() async {
     options: DefaultFirebaseOptions.currentPlatform,
   );
   
+  await WidgetService.configureSharedAuthentication();
+
   // Initialize notifications service
   await notificationsService.initialize();
   

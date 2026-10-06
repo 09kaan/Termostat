@@ -182,12 +182,13 @@ final class ThermostatCommandTests: XCTestCase {
 
     // MARK: - Payload Tests
 
-    func testHeatingOnPayload_containsModeOnAndTargetTemp25_doesNotContainIsHeating() {
+    func testHeatingOnPayload_containsOnlyModeOn_preservesTargetTemperatureAndRelay() {
         let command = ThermostatHeatingCommand.turnOn
         let payload = command.payload
 
         XCTAssertEqual(payload["mode"] as? String, "on")
-        XCTAssertEqual(payload["targetTemperature"] as? Double, 25.0)
+        XCTAssertNil(payload["targetTemperature"], "turnOn must preserve the saved target temperature")
+        XCTAssertEqual(payload.count, 1)
         XCTAssertNil(payload["isHeating"], "turnOn payload must not set isHeating; relay decision belongs to firmware")
     }
 
@@ -232,7 +233,9 @@ final class ThermostatCommandTests: XCTestCase {
         }
 
         XCTAssertEqual(json["mode"] as? String, "on")
-        XCTAssertEqual(json["targetTemperature"] as? Double, 25.0)
+        XCTAssertNil(json["targetTemperature"], "turnOn PATCH must not change target temperature")
+        XCTAssertNil(json["isHeating"])
+        XCTAssertEqual(json.count, 1)
     }
 
     func testBuildRequest_rejectsInvalidOrInsecureDatabaseURL() {
@@ -354,9 +357,9 @@ final class ThermostatCommandTests: XCTestCase {
         defer { holder.clearCoordinator() }
 
         // Trigger delayed callback strictly after listener registration has completed
-        mockSource.onRegistration = {
-            DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) {
-                mockSource.triggerCallback(hasUser: true)
+        mockSource.onRegistration = { [weak mockSource] in
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) { [weak mockSource] in
+                mockSource?.triggerCallback(hasUser: true)
             }
         }
 
@@ -661,5 +664,104 @@ final class ThermostatCommandTests: XCTestCase {
         } catch {
             XCTFail("Unexpected error: \(error)")
         }
+    }
+    // MARK: - Variable Temperature Commands
+
+    func testSetTemperaturePayload_setsTargetAndMode_withoutForcingRelay() throws {
+        let command = ThermostatHeatingCommand.setTemperature(23.0)
+        try command.validate()
+        XCTAssertEqual(command.payload["mode"] as? String, "on")
+        XCTAssertEqual(command.payload["targetTemperature"] as? Double, 23.0)
+        XCTAssertNil(command.payload["isHeating"])
+    }
+
+    func testSetTemperatureValidation_acceptsBoundariesAndDecimals() throws {
+        for value in [10.0, 22.5, 30.0] {
+            try ThermostatHeatingCommand.setTemperature(value).validate()
+        }
+    }
+
+    func testSetTemperatureInvalidValues_doNotAuthenticateOrSend() async {
+        for value in [9.0, 31.0, Double.nan, Double.infinity, -Double.infinity] {
+            let auth = MockAuthSessionProvider()
+            let transport = MockHTTPRequestPerformer()
+            do {
+                try await ThermostatCommandService.send(
+                    .setTemperature(value),
+                    databaseURL: validDatabaseURL,
+                    authProvider: auth,
+                    networkSession: transport
+                )
+                XCTFail("Expected invalidTemperature")
+            } catch {
+                XCTAssertEqual(error as? ThermostatCommandError, .invalidTemperature)
+            }
+            XCTAssertFalse(auth.ensureAuthCalled)
+            XCTAssertEqual(transport.requestCount, 0)
+        }
+    }
+
+    func testSetTemperatureRequest_containsAtomicModeAndTarget() throws {
+        let request = try ThermostatCommandService.buildRequest(
+            databaseURL: validDatabaseURL,
+            deviceID: "device1",
+            token: "test-token",
+            command: .setTemperature(22.5)
+        )
+        let body = try XCTUnwrap(request.httpBody)
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(request.httpMethod, "PATCH")
+        XCTAssertEqual(payload["mode"] as? String, "on")
+        XCTAssertEqual(payload["targetTemperature"] as? Double, 22.5)
+        XCTAssertNil(payload["isHeating"])
+    }
+    // MARK: - Widget Snapshot Parsing
+
+    func testWidgetSnapshot_parsesRealTelemetryAndRelayState() throws {
+        let json = #"{"currentTemperature":22.4,"currentHumidity":48,"targetTemperature":23,"mode":"on","isHeating":false}"#
+        let snapshot = try WidgetSnapshot.fromDeviceJSON(Data(json.utf8))
+        XCTAssertEqual(snapshot.temperature, 22.4)
+        XCTAssertEqual(snapshot.humidity, 48)
+        XCTAssertEqual(snapshot.targetTemperature, 23)
+        XCTAssertEqual(snapshot.isHeating, false)
+        XCTAssertEqual(snapshot.mode, "on")
+    }
+
+    func testWidgetSnapshot_missingReadings_areNotInvented() throws {
+        let json = #"{"mode":"on","targetTemperature":23}"#
+        let snapshot = try WidgetSnapshot.fromDeviceJSON(Data(json.utf8))
+        XCTAssertNil(snapshot.temperature)
+        XCTAssertNil(snapshot.humidity)
+        XCTAssertNil(snapshot.isHeating)
+    }
+
+    func testWidgetSnapshot_rejectsBooleanNumbersAndInvalidRanges() throws {
+        let json = #"{"currentTemperature":true,"currentHumidity":110,"targetTemperature":31,"mode":"invalid","isHeating":1}"#
+        let snapshot = try WidgetSnapshot.fromDeviceJSON(Data(json.utf8))
+        XCTAssertNil(snapshot.temperature)
+        XCTAssertNil(snapshot.humidity)
+        XCTAssertNil(snapshot.targetTemperature)
+        XCTAssertNil(snapshot.mode)
+        XCTAssertNil(snapshot.isHeating)
+    }
+
+    func testWidgetSnapshot_commandAck_doesNotMakeOldSensorDataFresh() {
+        let snapshot = WidgetSnapshot(
+            temperature: 22.4, targetTemperature: 23, mode: "on",
+            observedAtMilliseconds: Date().addingTimeInterval(-3600).timeIntervalSince1970 * 1000,
+            commandAtMilliseconds: Date().timeIntervalSince1970 * 1000
+        )
+        XCTAssertTrue(snapshot.isStale)
+        XCTAssertTrue(snapshot.hasPendingCommand)
+    }
+
+    func testWidgetSnapshot_codablesMatchSharedJSONSchema() throws {
+        let json = #"{"temperature":22.4,"humidity":48,"targetTemperature":23,"mode":"on","isHeating":false,"observedAtMilliseconds":1800000000000,"commandAtMilliseconds":null}"#
+        let snapshot = try JSONDecoder().decode(WidgetSnapshot.self, from: Data(json.utf8))
+        XCTAssertEqual(snapshot.temperature, 22.4)
+        XCTAssertFalse(snapshot.hasPendingCommand)
+        XCTAssertEqual(snapshot.observedDate?.timeIntervalSince1970, 1800000000)
+        let decoded = try JSONDecoder().decode(WidgetSnapshot.self, from: JSONEncoder().encode(snapshot))
+        XCTAssertEqual(decoded, snapshot)
     }
 }

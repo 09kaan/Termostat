@@ -20,5 +20,13 @@ struct ThermostatShortcuts: AppShortcutsProvider {
             shortTitle: "Isıtmayı kapat",
             systemImageName: "power"
         )
+        AppShortcut(
+            intent: SetTemperatureIntent(),
+            phrases: [
+                "\(.applicationName) ile sıcaklığı ayarla"
+            ],
+            shortTitle: "Sıcaklığı ayarla",
+            systemImageName: "thermometer"
+        )
     }
 }

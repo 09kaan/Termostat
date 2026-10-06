@@ -14,6 +14,8 @@ public enum ThermostatCommandError: LocalizedError, Equatable {
     case missingConfiguration
     case signInRequired
     case invalidDatabaseURL
+    case invalidTemperature
+    case sharedAuthenticationUnavailable
     case authorizationDenied
     case requestFailed(Int)
     case invalidResponse
@@ -28,6 +30,10 @@ public enum ThermostatCommandError: LocalizedError, Equatable {
             return "Termostat bağlantı yapılandırması bulunamadı."
         case .signInRequired:
             return "Önce Termostat uygulamasında giriş yapmalısınız."
+        case .sharedAuthenticationUnavailable:
+            return "Widget oturum paylaşımı kurulamadı. App Groups ve imzalama ayarlarını kontrol edin."
+        case .invalidTemperature:
+            return "Sıcaklık 10 ile 30 derece arasında olmalıdır."
         case .invalidDatabaseURL:
             return "Termostat bağlantı adresi geçersiz."
         case .authorizationDenied:
@@ -53,10 +59,19 @@ public enum ThermostatCommandError: LocalizedError, Equatable {
 public enum ThermostatHeatingCommand: Equatable, Sendable {
     case turnOn
     case turnOff
+    case setTemperature(Double)
+
+    public func validate() throws {
+        if case .setTemperature(let temperature) = self {
+            guard temperature.isFinite, (10.0...30.0).contains(temperature) else {
+                throw ThermostatCommandError.invalidTemperature
+            }
+        }
+    }
 
     /// Payload sent to Firebase Realtime Database.
     ///
-    /// - turnOn: Sets mode to "on" and targetTemperature to 25.0°C.
+    /// - turnOn: Sets mode to "on" without altering the saved target temperature.
     ///   DOES NOT set isHeating=true directly; boiler relay decision is left to firmware/hysteresis.
     /// - turnOff: Sets mode to "off" and isHeating to false (preserving existing Flutter behavior).
     ///   DOES NOT alter targetTemperature.
@@ -64,8 +79,12 @@ public enum ThermostatHeatingCommand: Equatable, Sendable {
         switch self {
         case .turnOn:
             return [
+                "mode": "on"
+            ]
+        case .setTemperature(let temperature):
+            return [
                 "mode": "on",
-                "targetTemperature": 25.0
+                "targetTemperature": temperature
             ]
         case .turnOff:
             return [
@@ -284,6 +303,7 @@ public final class AuthCoordinatorHolder: @unchecked Sendable {
 #if canImport(FirebaseCore)
 public enum ThermostatFirebaseConfig {
     private static let configureLock = NSLock()
+    private static var preparedSharedAuth = false
 
     /// Safely returns existing FirebaseApp or configures it once from GoogleService-Info.plist.
     /// Serialized via NSLock to eliminate check-then-configure race conditions.
@@ -292,6 +312,7 @@ public enum ThermostatFirebaseConfig {
         defer { configureLock.unlock() }
 
         if let existing = FirebaseApp.app() {
+            try prepareSharedAuth(existing)
             return existing
         }
         guard let path = Bundle.main.path(forResource: "GoogleService-Info", ofType: "plist"),
@@ -302,7 +323,23 @@ public enum ThermostatFirebaseConfig {
         guard let app = FirebaseApp.app() else {
             throw ThermostatCommandError.missingConfiguration
         }
+        try prepareSharedAuth(app)
         return app
+    }
+
+    private static func prepareSharedAuth(_ app: FirebaseApp) throws {
+        #if canImport(FirebaseAuth)
+        if !preparedSharedAuth {
+            do {
+                // App Groups can also be used as a shared Keychain access group.
+                try Auth.auth(app: app).useUserAccessGroup(WidgetSnapshotStore.appGroupID)
+                preparedSharedAuth = true
+            } catch {
+                // Never surface SDK error userInfo or authentication URLs.
+                throw ThermostatCommandError.sharedAuthenticationUnavailable
+            }
+        }
+        #endif
     }
 
     /// Resolves the Realtime Database URL from the configured FirebaseApp.
@@ -432,6 +469,8 @@ public enum ThermostatCommandService {
         token: String,
         command: ThermostatHeatingCommand
     ) throws -> URLRequest {
+        try command.validate()
+
         guard var components = URLComponents(string: databaseURL),
               components.scheme == "https",
               components.host != nil,
@@ -466,7 +505,7 @@ public enum ThermostatCommandService {
     /// Sends a heating command to the thermostat via Firebase Realtime Database REST API.
     ///
     /// - Parameters:
-    ///   - command: `.turnOn` or `.turnOff`
+    ///   - command: `.turnOn`, `.turnOff` or `.setTemperature(Double)`
     ///   - deviceID: Target thermostat device ID (default: "device1")
     ///   - databaseURL: Optional explicit database URL (if nil, resolved from FirebaseApp)
     ///   - authProvider: Optional auth provider for dependency injection / testing
@@ -479,6 +518,11 @@ public enum ThermostatCommandService {
         networkSession: HTTPRequestPerforming = URLSession.shared
     ) async throws {
         try Task.checkCancellation()
+        try command.validate()
+        // Extra logout guard; real Firebase authentication is still required below.
+        if authProvider == nil && WidgetSnapshotStore.explicitlySignedOut {
+            throw ThermostatCommandError.signInRequired
+        }
 
         let auth: ThermostatAuthSessionProviding
         let dbURL: String
@@ -505,6 +549,9 @@ public enum ThermostatCommandService {
         // Step 2: Retrieve current user ID token (unforced)
         var token = try await auth.getValidIDToken(forcingRefresh: false)
         try Task.checkCancellation()
+        if authProvider == nil && WidgetSnapshotStore.explicitlySignedOut {
+            throw ThermostatCommandError.signInRequired
+        }
 
         // Step 3: Send initial PATCH request
         var status = try await executePatch(
@@ -519,6 +566,10 @@ public enum ThermostatCommandService {
         if status == 401 {
             try Task.checkCancellation()
             token = try await auth.getValidIDToken(forcingRefresh: true)
+            try Task.checkCancellation()
+            if authProvider == nil && WidgetSnapshotStore.explicitlySignedOut {
+                throw ThermostatCommandError.signInRequired
+            }
             status = try await executePatch(
                 command: command,
                 deviceID: deviceID,
@@ -531,6 +582,9 @@ public enum ThermostatCommandService {
         // Step 5: Check response status
         switch status {
         case 200..<300:
+            if authProvider == nil && databaseURL == nil {
+                WidgetSnapshotStore.recordAccepted(command)
+            }
             return
         case 401, 403:
             throw ThermostatCommandError.authorizationDenied

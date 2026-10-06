@@ -83,3 +83,38 @@ workflows:
       - termostat_app/ios/build/xcodebuild_test.log
       - termostat_app/ios/build/flutter_release_build.log
       - termostat_app/build/ios/iphoneos/*.app
+
+  # Optional signed IPA workflow. Upload BOTH updated profiles and a certificate
+  # to Codemagic Team settings first. This workflow does NOT publish automatically.
+  ios-widget-signed-artifact:
+    name: Termostat + Widget Signed IPA
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    working_directory: termostat_app
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.example.termostatApp
+    scripts:
+      - name: Dependencies
+        script: |
+          set -euo pipefail
+          flutter pub get
+          cd ios
+          pod install
+      - name: Apply both provisioning profiles
+        script: |
+          set -euo pipefail
+          xcode-project use-profiles
+      - name: Build signed app and widget
+        script: |
+          set -euo pipefail
+          mkdir -p ios/build
+          flutter build ipa --release --export-options-plist "$HOME/export_options.plist" 2>&1 | tee ios/build/widget_signed_build.log
+    artifacts:
+      - termostat_app/build/ios/ipa/*.ipa
+      - termostat_app/build/ios/archive/*.xcarchive
+      - termostat_app/ios/build/widget_signed_build.log

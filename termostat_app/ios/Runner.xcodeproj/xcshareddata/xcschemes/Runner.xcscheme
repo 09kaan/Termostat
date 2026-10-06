@@ -20,6 +20,9 @@
                ReferencedContainer = "container:Runner.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
+         <BuildActionEntry buildForTesting="YES" buildForRunning="YES" buildForProfiling="YES" buildForArchiving="YES" buildForAnalyzing="YES">
+            <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="13F7A87A6FAF7270ADA8187B" BuildableName="ThermostatWidgetExtension.appex" BlueprintName="ThermostatWidgetExtension" ReferencedContainer="container:Runner.xcodeproj" />
+         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction

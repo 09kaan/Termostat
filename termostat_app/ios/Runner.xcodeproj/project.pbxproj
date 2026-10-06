@@ -19,6 +19,47 @@
 		CA001106294A000100000003 /* ThermostatIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA001105294A000100000003 /* ThermostatIntents.swift */; };
 		CA001108294A000100000004 /* ThermostatShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA001107294A000100000004 /* ThermostatShortcuts.swift */; };
 		CA00110A294A000100000005 /* ThermostatCommandTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA001109294A000100000005 /* ThermostatCommandTests.swift */; };
+		32C9944FB122B076EDD3B15C /* Widget integration */ = {
+			isa = PBXBuildFile;
+			fileRef = A1F0CF81BEFD587FE7976A01;
+		};
+		FF218BE286CB440ABB2C5EA1 /* Widget integration */ = {
+			isa = PBXBuildFile;
+			fileRef = 39139AEA7AD5298C34D7A0A1;
+		};
+		0D9F9CB8E4A1BD535A3BB6C1 /* Widget integration */ = {
+			isa = PBXBuildFile;
+			fileRef = 8E00B48695DA4E47C65547B2;
+		};
+		37078BF532567F4FE284AE0B /* Widget integration */ = {
+			isa = PBXBuildFile;
+			fileRef = A1F0CF81BEFD587FE7976A01;
+		};
+		728734F9F6D3B7B1CA16669A /* Widget integration */ = {
+			isa = PBXBuildFile;
+			fileRef = 39139AEA7AD5298C34D7A0A1;
+		};
+		BEEB4D1B043E2BB7E47AC7B5 /* Widget integration */ = {
+			isa = PBXBuildFile;
+			fileRef = CA001103294A000100000002;
+		};
+		717D30ED1966E5B1F05B148F /* Widget integration */ = {
+			isa = PBXBuildFile;
+			fileRef = CA001105294A000100000003;
+		};
+		1D566EEFB63E77B2CB0EB489 /* Widget integration */ = {
+			isa = PBXBuildFile;
+			fileRef = CA001101294A000100000001;
+		};
+		8EBDEAA4F431E9D140AC8D59 /* Widget integration */ = {
+			isa = PBXBuildFile;
+			fileRef = 65F8152F7F531A82660DE1D5;
+			settings = {
+				ATTRIBUTES = (
+					RemoveHeadersOnCopy,
+				);
+			};
+		};
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -28,6 +69,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = 97C146ED1CF9000F007C117D;
 			remoteInfo = Runner;
+		};
+		2A8DA02FFB2316E39C1990C5 /* Widget integration */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 97C146E61CF9000F007C117D;
+			proxyType = 1;
+			remoteGlobalIDString = 13F7A87A6FAF7270ADA8187B;
+			remoteInfo = ThermostatWidgetExtension;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -40,6 +88,17 @@
 			files = (
 			);
 			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		63A6CDF4C6F566DB76BB4E52 /* Widget integration */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				8EBDEAA4F431E9D140AC8D59,
+			);
+			name = "Embed App Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXCopyFilesBuildPhase section */
@@ -65,10 +124,78 @@
 		CA001105294A000100000003 /* ThermostatIntents.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ThermostatIntents.swift; sourceTree = "<group>"; };
 		CA001107294A000100000004 /* ThermostatShortcuts.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ThermostatShortcuts.swift; sourceTree = "<group>"; };
 		CA001109294A000100000005 /* ThermostatCommandTests.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = ThermostatCommandTests.swift; sourceTree = "<group>"; };
+		8E00B48695DA4E47C65547B2 /* Widget integration */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = ThermostatWidget.swift;
+			sourceTree = "<group>";
+		};
+		C03CBD09E07EC5869C15D960 /* Widget integration */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = text.plist.xml;
+			path = Info.plist;
+			sourceTree = "<group>";
+		};
+		6CACC4A31F94EF25EFC676B8 /* Widget integration */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = text.plist.entitlements;
+			path = ThermostatWidget.entitlements;
+			sourceTree = "<group>";
+		};
+		ACDBEAC853B01908DF55CEA1 /* Widget integration */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = text.plist.entitlements;
+			path = Runner.entitlements;
+			sourceTree = "<group>";
+		};
+		A1F0CF81BEFD587FE7976A01 /* Widget integration */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = WidgetSnapshotStore.swift;
+			sourceTree = "<group>";
+		};
+		39139AEA7AD5298C34D7A0A1 /* Widget integration */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = WidgetControlIntents.swift;
+			sourceTree = "<group>";
+		};
+		65F8152F7F531A82660DE1D5 /* Widget integration */ = {
+			isa = PBXFileReference;
+			explicitFileType = "wrapper.app-extension";
+			includeInIndex = 0;
+			path = ThermostatWidgetExtension.appex;
+			sourceTree = BUILT_PRODUCTS_DIR;
+		};
+		45EB6870EDE3BDC2B36CF813 /* Widget integration */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = text.xcconfig;
+			path = Debug.xcconfig;
+			sourceTree = "<group>";
+		};
+		15E1674330CD25A01C745C6C /* Widget integration */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = text.xcconfig;
+			path = Release.xcconfig;
+			sourceTree = "<group>";
+		};
+		8F39033B4748371BAEEDA575 /* Widget integration */ = {
+			isa = PBXFileReference;
+			lastKnownFileType = text.xcconfig;
+			path = Profile.xcconfig;
+			sourceTree = "<group>";
+		};
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		97C146EB1CF9000F007C117D /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		68E3C3D4A5EF504EB752C621 /* Widget integration */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -102,6 +229,8 @@
 			isa = PBXGroup;
 			children = (
 				9740EEB11CF90186004384FC /* Flutter */,
+				4F3AB659CD575ED549CB33EF /* ThermostatWidget */,
+				B2A727BFF6159C3A49DE8425 /* SharedWidget */,
 				97C146F01CF9000F007C117D /* Runner */,
 				97C146EF1CF9000F007C117D /* Products */,
 				331C8082294A63A400263BE5 /* RunnerTests */,
@@ -113,6 +242,7 @@
 			children = (
 				97C146EE1CF9000F007C117D /* Runner.app */,
 				331C8081294A63A400263BE5 /* RunnerTests.xctest */,
+				65F8152F7F531A82660DE1D5 /* ThermostatWidgetExtension.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -124,6 +254,7 @@
 				97C146FD1CF9000F007C117D /* Assets.xcassets */,
 				97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */,
 				97C147021CF9000F007C117D /* Info.plist */,
+				ACDBEAC853B01908DF55CEA1 /* Runner.entitlements */,
 				CA001101294A000100000001 /* GoogleService-Info.plist */,
 				1498D2321E8E86230040F4C2 /* GeneratedPluginRegistrant.h */,
 				1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */,
@@ -134,6 +265,28 @@
 				74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */,
 			);
 			path = Runner;
+			sourceTree = "<group>";
+		};
+		4F3AB659CD575ED549CB33EF /* Widget integration */ = {
+			isa = PBXGroup;
+			children = (
+				8E00B48695DA4E47C65547B2,
+				C03CBD09E07EC5869C15D960,
+				6CACC4A31F94EF25EFC676B8,
+				45EB6870EDE3BDC2B36CF813,
+				15E1674330CD25A01C745C6C,
+				8F39033B4748371BAEEDA575,
+			);
+			path = ThermostatWidget;
+			sourceTree = "<group>";
+		};
+		B2A727BFF6159C3A49DE8425 /* Widget integration */ = {
+			isa = PBXGroup;
+			children = (
+				A1F0CF81BEFD587FE7976A01,
+				39139AEA7AD5298C34D7A0A1,
+			);
+			path = SharedWidget;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -166,15 +319,34 @@
 				97C146EC1CF9000F007C117D /* Resources */,
 				9705A1C41CF9048500538489 /* Embed Frameworks */,
 				3B06AD1E1E4923F5004D2608 /* Thin Binary */,
+				63A6CDF4C6F566DB76BB4E52 /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				588903875291E154645056E8 /* Widget extension */,
 			);
 			name = Runner;
 			productName = Runner;
 			productReference = 97C146EE1CF9000F007C117D /* Runner.app */;
 			productType = "com.apple.product-type.application";
+		};
+		13F7A87A6FAF7270ADA8187B /* Widget integration */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BA288C858F0CBC2B65400020;
+			buildPhases = (
+				6F0450034243A07A8C8C5E76,
+				68E3C3D4A5EF504EB752C621,
+				1AE71029D7D4A0AE26FE5BF6,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ThermostatWidgetExtension;
+			productName = ThermostatWidgetExtension;
+			productReference = 65F8152F7F531A82660DE1D5;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -186,6 +358,10 @@
 				LastUpgradeCheck = 1510;
 				ORGANIZATIONNAME = "";
 				TargetAttributes = {
+					13F7A87A6FAF7270ADA8187B = {
+						CreatedOnToolsVersion = 15.0;
+						SystemCapabilities = { com.apple.ApplicationGroups.iOS = { enabled = 1; }; };
+					};
 					331C8080294A63A400263BE5 = {
 						CreatedOnToolsVersion = 14.0;
 						TestTargetID = 97C146ED1CF9000F007C117D;
@@ -193,6 +369,7 @@
 					97C146ED1CF9000F007C117D = {
 						CreatedOnToolsVersion = 7.3.1;
 						LastSwiftMigration = 1100;
+						SystemCapabilities = { com.apple.ApplicationGroups.iOS = { enabled = 1; }; };
 					};
 				};
 			};
@@ -211,6 +388,7 @@
 			targets = (
 				97C146ED1CF9000F007C117D /* Runner */,
 				331C8080294A63A400263BE5 /* RunnerTests */,
+				13F7A87A6FAF7270ADA8187B /* ThermostatWidgetExtension */,
 			);
 		};
 /* End PBXProject section */
@@ -232,6 +410,14 @@
 				97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */,
 				97C146FC1CF9000F007C117D /* Main.storyboard in Resources */,
 				CA001102294A000100000001 /* GoogleService-Info.plist in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1AE71029D7D4A0AE26FE5BF6 /* Widget integration */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1D566EEFB63E77B2CB0EB489,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -290,6 +476,20 @@
 				CA001104294A000100000002 /* ThermostatCommandService.swift in Sources */,
 				CA001106294A000100000003 /* ThermostatIntents.swift in Sources */,
 				CA001108294A000100000004 /* ThermostatShortcuts.swift in Sources */,
+				32C9944FB122B076EDD3B15C /* WidgetSnapshotStore */,
+				FF218BE286CB440ABB2C5EA1 /* WidgetControlIntents */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		6F0450034243A07A8C8C5E76 /* Widget integration */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0D9F9CB8E4A1BD535A3BB6C1,
+				37078BF532567F4FE284AE0B,
+				728734F9F6D3B7B1CA16669A,
+				BEEB4D1B043E2BB7E47AC7B5,
+				717D30ED1966E5B1F05B148F,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -300,6 +500,11 @@
 			isa = PBXTargetDependency;
 			target = 97C146ED1CF9000F007C117D /* Runner */;
 			targetProxy = 331C8085294A63A400263BE5 /* PBXContainerItemProxy */;
+		};
+		588903875291E154645056E8 /* Widget integration */ = {
+			isa = PBXTargetDependency;
+			target = 13F7A87A6FAF7270ADA8187B;
+			targetProxy = 2A8DA02FFB2316E39C1990C5;
 		};
 /* End PBXTargetDependency section */
 
@@ -384,6 +589,7 @@
 				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = Runner/Info.plist;
+				CODE_SIGN_ENTITLEMENTS = Runner/Runner.entitlements;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -563,6 +769,7 @@
 				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = Runner/Info.plist;
+				CODE_SIGN_ENTITLEMENTS = Runner/Runner.entitlements;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -585,6 +792,7 @@
 				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
 				ENABLE_BITCODE = NO;
 				INFOPLIST_FILE = Runner/Info.plist;
+				CODE_SIGN_ENTITLEMENTS = Runner/Runner.entitlements;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -596,6 +804,93 @@
 				VERSIONING_SYSTEM = "apple-generic";
 			};
 			name = Release;
+		};
+		B493992DA1F5765B984231F0 /* Widget integration */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 45EB6870EDE3BDC2B36CF813;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_ENTITLEMENTS = ThermostatWidget/ThermostatWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
+				MARKETING_VERSION = "$(FLUTTER_BUILD_NAME)";
+				INFOPLIST_FILE = ThermostatWidget/Info.plist;
+				GENERATE_INFOPLIST_FILE = NO;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.termostatApp.ThermostatWidget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				ENABLE_BITCODE = NO;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		B20B88C9ECB4AFFCD1CEDDB1 /* Widget integration */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 15E1674330CD25A01C745C6C;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_ENTITLEMENTS = ThermostatWidget/ThermostatWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
+				MARKETING_VERSION = "$(FLUTTER_BUILD_NAME)";
+				INFOPLIST_FILE = ThermostatWidget/Info.plist;
+				GENERATE_INFOPLIST_FILE = NO;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.termostatApp.ThermostatWidget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				ENABLE_BITCODE = NO;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+			};
+			name = Release;
+		};
+		8216EA37328BE67E8DD18339 /* Widget integration */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 8F39033B4748371BAEEDA575;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_ENTITLEMENTS = ThermostatWidget/ThermostatWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
+				MARKETING_VERSION = "$(FLUTTER_BUILD_NAME)";
+				INFOPLIST_FILE = ThermostatWidget/Info.plist;
+				GENERATE_INFOPLIST_FILE = NO;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.example.termostatApp.ThermostatWidget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				ENABLE_BITCODE = NO;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+			};
+			name = Profile;
 		};
 /* End XCBuildConfiguration section */
 
@@ -626,6 +921,16 @@
 				97C147061CF9000F007C117D /* Debug */,
 				97C147071CF9000F007C117D /* Release */,
 				249021D4217E4FDB00AE95B9 /* Profile */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		BA288C858F0CBC2B65400020 /* Widget integration */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B493992DA1F5765B984231F0,
+				B20B88C9ECB4AFFCD1CEDDB1,
+				8216EA37328BE67E8DD18339,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

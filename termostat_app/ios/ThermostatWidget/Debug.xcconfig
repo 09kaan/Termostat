@@ -1,0 +1,2 @@
+#include? "../Pods/Target Support Files/Pods-ThermostatWidgetExtension/Pods-ThermostatWidgetExtension.debug.xcconfig"
+#include "../Flutter/Generated.xcconfig"

@@ -27,6 +27,7 @@ class ThermostatProvider with ChangeNotifier {
         final data = Map<String, dynamic>.from(snapshot.value as Map);
         data['id'] = deviceId;
         _thermostat = Thermostat.fromJson(data);
+        _pushWidgetUpdate(data);
 
         // Log the initial thermostat state
         if (_thermostat != null && (_thermostat!.mode == 'on' || _thermostat!.mode == 'off')) {
@@ -125,7 +126,7 @@ class ThermostatProvider with ChangeNotifier {
         final data = Map<String, dynamic>.from(event.snapshot.value as Map);
         data['id'] = _thermostat!.id;
         _thermostat = Thermostat.fromJson(data);
-        _pushWidgetUpdate();
+        _pushWidgetUpdate(data);
         notifyListeners();
       }
     });
@@ -135,15 +136,19 @@ class ThermostatProvider with ChangeNotifier {
     // No-op for now
   }
 
-  /// Push current thermostat data to iOS home screen widget
-  void _pushWidgetUpdate() {
-    if (_thermostat == null) return;
+  /// Publish real sensor fields only; mode=on does not mean the relay is on.
+  void _pushWidgetUpdate(Map<String, dynamic> raw) {
+    final temperature = raw['currentTemperature'];
+    final humidity = raw['currentHumidity'] ?? raw['humidity'];
+    final target = raw['targetTemperature'];
+    final mode = raw['mode'];
+    if (temperature is! num || humidity is! num || target is! num || mode is! String) return;
     WidgetService.updateWidget(
-      temperature: _thermostat!.currentTemperature,
-      humidity: _thermostat!.humidity.toInt(),
-      isHeating: _thermostat!.mode == 'on',
-      mode: _thermostat!.mode,
-      targetTemp: _thermostat!.targetTemperature,
+      temperature: temperature.toDouble(),
+      humidity: humidity.toDouble(),
+      isHeating: raw['isHeating'] is bool ? raw['isHeating'] as bool : null,
+      mode: mode,
+      targetTemp: target.toDouble(),
     );
   }
 }

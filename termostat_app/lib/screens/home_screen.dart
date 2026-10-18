@@ -10,6 +10,7 @@ import '../widgets/schedule_card.dart';
 import '../widgets/weather_card.dart';
 import '../widgets/default_page_controller.dart';
 import './schedule_list_screen.dart';
+import './wiz_lights_screen.dart';
 import './thermostat_log_screen.dart';
 import '../services/geofence_service.dart';
 import '../services/deep_link_service.dart';
@@ -406,6 +407,18 @@ class _HomeScreenState extends State<HomeScreen> {
                                     label: const Text("PC'yi Aç"),
                                   ),
                                 ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Card(
+                            child: ListTile(
+                              leading: const Icon(Icons.lightbulb_outline),
+                              title: const Text('WiZ ışıklar'),
+                              subtitle: const Text('Ev dışından aç/kapat, parlaklık ve renk'),
+                              trailing: const Icon(Icons.chevron_right),
+                              onTap: () => Navigator.of(context).push(
+                                MaterialPageRoute<void>(builder: (_) => const WizLightsScreen()),
                               ),
                             ),
                           ),

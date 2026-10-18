@@ -97,6 +97,10 @@ struct ThermostatWidgetEntryView: View {
         HStack(spacing: 6) {
             Image(systemName: "house").foregroundStyle(accent)
             Text("Ev").fontWeight(.semibold)
+            Text("KD")
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(muted)
+                .accessibilityHidden(true)
         }.font(.system(size: 13))
     }
     private var temperature: some View {
@@ -211,18 +215,183 @@ struct ThermostatWidgetEntryView: View {
     }
 }
 
+// Lock Screen layouts use system styling, not the Home Screen card background.
+@available(iOS 17.0, *)
+struct ThermostatLockScreenView: View {
+    let entry: ThermostatEntry
+    @Environment(\.widgetFamily) private var family
+    private var snapshot: WidgetSnapshot? { entry.snapshot }
+
+    private func degrees(_ value: Double?, precise: Bool = false) -> String {
+        guard let value = value, value.isFinite else { return "—" }
+        return value.formatted(
+            .number.locale(Locale(identifier: "tr_TR"))
+                .precision(.fractionLength((precise ? 1 : 0)...1))
+        ) + "°"
+    }
+
+    private var state: String {
+        if snapshot == nil { return "Veri yok" }
+        if entry.notice != nil { return "Güncellenemedi" }
+        if snapshot?.hasPendingCommand == true { return "Komut gönderildi" }
+        if snapshot?.isStale != false { return "Eski veri" }
+        if snapshot?.mode == "off" { return "Kapalı" }
+        if snapshot?.isHeating == true { return "Isıtıyor" }
+        if snapshot?.mode == "on" { return "Isıtma açık" }
+        return "Durum bilinmiyor"
+    }
+
+    private var stateIcon: String {
+        if snapshot == nil || entry.notice != nil || snapshot?.isStale != false {
+            return "exclamationmark.circle"
+        }
+        if snapshot?.hasPendingCommand == true { return "clock" }
+        return snapshot?.isHeating == true ? "flame.fill" : "power"
+    }
+
+    var body: some View {
+        Group {
+            if family == .accessoryCircular { circular }
+            else { rectangular }
+        }
+        .foregroundStyle(.primary)
+        .containerBackground(for: .widget) { Color.clear }
+        .widgetURL(URL(string: "termostat://"))
+        .accessibilityElement(children: .contain)
+    }
+
+    private var accessibilityDescription: String {
+        guard snapshot != nil else {
+            return entry.notice ?? "Termostat verisi yok. Uygulamayı açıp giriş yap."
+        }
+        return "Termostat. Oda sıcaklığı \(degrees(snapshot?.temperature, precise: true)). Hedef \(degrees(snapshot?.targetTemperature)). \(state). \(entry.notice ?? "")"
+    }
+
+    // The button names its explicit command; it does not claim relay confirmation.
+    private var controlsEnabled: Bool {
+        guard let snapshot = snapshot else { return false }
+        return (snapshot.mode == "on" || snapshot.mode == "off")
+            && !snapshot.isStale
+            && !snapshot.hasPendingCommand
+            && entry.notice == nil
+    }
+
+    private var rectangular: some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 4) {
+                    Image(systemName: "house.fill")
+                    Text("Ev").fontWeight(.semibold)
+                    Text("KD").font(.system(size: 9, weight: .medium))
+                        .accessibilityHidden(true)
+                }
+                .font(.system(size: 11))
+
+                Text(degrees(snapshot?.temperature, precise: true))
+                    .font(.system(size: 24, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                Text("Hedef \(degrees(snapshot?.targetTemperature))")
+                    .font(.system(size: 11))
+                Label(state, systemImage: stateIcon)
+                    .font(.system(size: 10))
+            }
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(accessibilityDescription)
+
+            powerButton
+        }
+        .padding(.horizontal, 2)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Keep the native App Intent button accessible to VoiceOver.
+        .accessibilityElement(children: .contain)
+    }
+
+    @ViewBuilder private var powerButton: some View {
+        if snapshot?.mode == "on" {
+            Button(intent: HeatingOffIntent()) {
+                powerButtonLabel("Kapat")
+            }
+            .buttonStyle(.plain)
+            .disabled(!controlsEnabled)
+            .opacity(controlsEnabled ? 1 : 0.4)
+            .accessibilityLabel("Isıtmayı kapat")
+        } else {
+            Button(intent: HeatingOnIntent()) {
+                powerButtonLabel("Aç")
+            }
+            .buttonStyle(.plain)
+            .disabled(!controlsEnabled)
+            .opacity(controlsEnabled ? 1 : 0.4)
+            .accessibilityLabel("Hedef sıcaklığı değiştirmeden ısıtmayı aç")
+        }
+    }
+
+    private func powerButtonLabel(_ title: String) -> some View {
+        VStack(spacing: 3) {
+            Image(systemName: "power")
+                .font(.system(size: 18, weight: .semibold))
+            Text(title).font(.system(size: 10, weight: .semibold))
+        }
+        .frame(width: 44, height: 44)
+        .background(Color.primary.opacity(0.14), in: RoundedRectangle(cornerRadius: 12))
+        .contentShape(Rectangle())
+    }
+
+    private var circular: some View {
+        ZStack {
+            AccessoryWidgetBackground()
+            VStack(spacing: 1) {
+                HStack(spacing: 3) {
+                    Image(systemName: stateIcon)
+                    Text("KD").font(.system(size: 8, weight: .medium))
+                        .accessibilityHidden(true)
+                }
+                .font(.system(size: 10))
+                Text(degrees(snapshot?.temperature, precise: true))
+                    .font(.system(size: 18, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                Text(snapshot == nil ? "Veri yok" : "H \(degrees(snapshot?.targetTemperature))")
+                    .font(.system(size: 10, weight: .medium))
+            }
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
+            .padding(5)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityDescription)
+    }
+}
+
+@available(iOS 17.0, *)
+struct ThermostatWidgetFamilyView: View {
+    let entry: ThermostatEntry
+    @Environment(\.widgetFamily) private var family
+
+    var body: some View {
+        switch family {
+        case .accessoryRectangular, .accessoryCircular:
+            ThermostatLockScreenView(entry: entry)
+        default:
+            GeometryReader { geometry in
+                ThermostatWidgetEntryView(entry: entry, compact: geometry.size.height < 160)
+            }
+        }
+    }
+}
+
 @main
 struct ThermostatWidget: Widget {
     let kind = WidgetSnapshotStore.widgetKind
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: ThermostatProvider()) { entry in
-            GeometryReader { geometry in
-                ThermostatWidgetEntryView(entry: entry, compact: geometry.size.height < 160)
-            }
+            ThermostatWidgetFamilyView(entry: entry)
         }
         .configurationDisplayName("Termostat")
         .description("Sıcaklığı gör, ısıtmayı aç/kapat ve hedefi değiştir.")
-        .supportedFamilies([.systemSmall, .systemMedium])
+        .supportedFamilies([.systemSmall, .systemMedium, .accessoryRectangular, .accessoryCircular])
         .contentMarginsDisabled()
     }
 }
@@ -235,6 +404,10 @@ struct ThermostatWidget_Previews: PreviewProvider {
             ThermostatWidgetEntryView(entry: .preview)
                 .previewContext(WidgetPreviewContext(family: .systemMedium))
                 .preferredColorScheme(.dark)
+            ThermostatLockScreenView(entry: .preview)
+                .previewContext(WidgetPreviewContext(family: .accessoryRectangular))
+            ThermostatLockScreenView(entry: .preview)
+                .previewContext(WidgetPreviewContext(family: .accessoryCircular))
         }
     }
 }

@@ -12,22 +12,21 @@ import 'providers/auth_provider.dart';
 import 'screens/settings_screen.dart';
 import 'services/notifications_service.dart';
 import 'services/widget_service.dart';
+import 'theme/app_theme.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
-  
+
   await WidgetService.configureSharedAuthentication();
 
   // Initialize notifications service
   await notificationsService.initialize();
-  
+
   runApp(const MyApp());
 }
-
-
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
@@ -44,41 +43,14 @@ class MyApp extends StatelessWidget {
       ],
       child: Consumer2<SettingsProvider, AuthProvider>(
         builder: (context, settings, auth, _) {
-    return MaterialApp(
+          return MaterialApp(
             title: 'Smart Thermostat',
-      theme: ThemeData(
-              useMaterial3: true,
-              colorScheme: ColorScheme.fromSeed(
-                seedColor: Colors.blue,
-                brightness: Brightness.light,
-              ),
-            ),
-            darkTheme: ThemeData(
-               useMaterial3: true,
-               colorScheme: ColorScheme.fromSeed(
-                 seedColor: Colors.blue,
-                 brightness: Brightness.dark,
-                 surface: const Color(0xFF1E1E1E),
-                 onSurface: Colors.white,
-                 background: const Color(0xFF121212),
-                 onBackground: Colors.white,
-                 primary: Colors.lightBlueAccent[400],
-                 onPrimary: Colors.white,
-                 secondary: Colors.cyanAccent[200],
-                 onSecondary: Colors.white,
-                 error: Colors.redAccent,
-                 onError: Colors.white,
-                 outline: Colors.grey[700],
-               ),
-              textTheme: const TextTheme().apply(
-                   bodyColor: Colors.white,
-                   displayColor: Colors.white,
-              ),
-            ),
-            themeMode: settings.theme == 'dark' ? ThemeMode.dark : ThemeMode.light,
-            home: auth.isLoggedIn
-                ? const HomeScreen()
-                : const LoginScreen(),
+            debugShowCheckedModeBanner: false,
+            theme: AppTheme.light,
+            darkTheme: AppTheme.dark,
+            themeMode:
+                settings.theme == 'dark' ? ThemeMode.dark : ThemeMode.light,
+            home: auth.isLoggedIn ? const HomeScreen() : const LoginScreen(),
             routes: {
               '/settings': (context) => const SettingsScreen(),
             },

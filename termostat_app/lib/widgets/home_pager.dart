@@ -23,37 +23,18 @@ class _HomePagerState extends State<HomePager> {
   final PageController _controller = PageController(initialPage: 2);
   int _index = 2;
   static const _titles = ['Log', 'Odam', 'Termostat', 'Takvim'];
-  static const _icons = [
-    Icons.history,
-    Icons.meeting_room_outlined,
-    Icons.thermostat,
-    Icons.calendar_month_outlined,
-  ];
-
   @override
   void dispose() {
     _controller.dispose();
     super.dispose();
   }
 
-  void _select(int index) {
-    if (!_controller.hasClients) return;
-    if (MediaQuery.of(context).disableAnimations) {
-      _controller.jumpToPage(index);
-    } else {
-      _controller.animateToPage(index,
-          duration: const Duration(milliseconds: 280),
-          curve: Curves.easeOutCubic);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
         title: Text(_titles[_index]),
-        centerTitle: true,
+        centerTitle: false,
         actions: [
           IconButton(
             key: const ValueKey('section-settings'),
@@ -63,42 +44,6 @@ class _HomePagerState extends State<HomePager> {
                 _index == 1 ? widget.onRoomSettings : widget.onAppSettings,
           ),
         ],
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(54),
-          child: SizedBox(
-            height: 54,
-            child: Row(children: [
-              for (var i = 0; i < _titles.length; i++)
-                Expanded(
-                  child: Semantics(
-                    selected: _index == i,
-                    button: true,
-                    label: _titles[i],
-                    child: InkWell(
-                      key: ValueKey('section-tab-$i'),
-                      onTap: () => _select(i),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          border: Border(
-                              bottom: BorderSide(
-                            width: 2,
-                            color: _index == i
-                                ? colors.primary
-                                : Colors.transparent,
-                          )),
-                        ),
-                        child: Center(
-                            child: Icon(_icons[i],
-                                color: _index == i
-                                    ? colors.primary
-                                    : colors.onSurfaceVariant)),
-                      ),
-                    ),
-                  ),
-                ),
-            ]),
-          ),
-        ),
       ),
       body: SafeArea(
         top: false,

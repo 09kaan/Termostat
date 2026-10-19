@@ -6,6 +6,7 @@ import '../providers/schedule_provider.dart';
 import '../models/schedule.dart';
 import '../widgets/mode_selector.dart';
 import '../widgets/weather_card.dart';
+import '../widgets/thermostat_summary.dart';
 import '../widgets/home_pager.dart';
 import './schedule_list_screen.dart';
 import './wiz_lights_screen.dart';
@@ -94,7 +95,7 @@ class _HomeScreenState extends State<HomeScreen> {
         WizLightsScreen(key: _roomKey, embedded: true),
         SingleChildScrollView(
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(16.0, 0.0, 16.0, 0.0),
+            padding: const EdgeInsets.fromLTRB(20.0, 12.0, 20.0, 24.0),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -120,213 +121,21 @@ class _HomeScreenState extends State<HomeScreen> {
                     return Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Card(
-                          elevation: 4,
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 12.0, vertical: 12.0),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                Center(
-                                  child: IntrinsicHeight(
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Text(
-                                              'Temperature',
-                                              style: Theme.of(context)
-                                                  .textTheme
-                                                  .bodyMedium
-                                                  ?.copyWith(
-                                                    fontSize: 18,
-                                                    fontWeight: FontWeight.w700,
-                                                  ),
-                                            ),
-                                            const SizedBox(height: 2),
-                                            Row(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.center,
-                                              children: [
-                                                Icon(Icons.thermostat,
-                                                    size: 28,
-                                                    color: Theme.of(context)
-                                                        .colorScheme
-                                                        .primary),
-                                                const SizedBox(width: 6),
-                                                Text(
-                                                  '${thermostat.thermostat!.currentTemperature.toStringAsFixed(1)}°C',
-                                                  style: Theme.of(context)
-                                                      .textTheme
-                                                      .headlineMedium
-                                                      ?.copyWith(
-                                                        color: Theme.of(context)
-                                                            .colorScheme
-                                                            .primary,
-                                                        fontWeight:
-                                                            FontWeight.w700,
-                                                        fontSize: 32,
-                                                      ),
-                                                ),
-                                              ],
-                                            ),
-                                          ],
-                                        ),
-                                        const SizedBox(width: 40),
-                                        Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Text(
-                                              'Humidity',
-                                              style: Theme.of(context)
-                                                  .textTheme
-                                                  .bodyMedium
-                                                  ?.copyWith(
-                                                    fontSize: 18,
-                                                    fontWeight: FontWeight.w700,
-                                                  ),
-                                            ),
-                                            const SizedBox(height: 2),
-                                            Row(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.center,
-                                              children: [
-                                                Icon(Icons.water_drop,
-                                                    size: 28,
-                                                    color: Theme.of(context)
-                                                        .colorScheme
-                                                        .primary),
-                                                const SizedBox(width: 6),
-                                                Text(
-                                                  '${thermostat.thermostat!.humidity.toStringAsFixed(1)}%',
-                                                  style: Theme.of(context)
-                                                      .textTheme
-                                                      .headlineMedium
-                                                      ?.copyWith(
-                                                        color: Theme.of(context)
-                                                            .colorScheme
-                                                            .primary,
-                                                        fontWeight:
-                                                            FontWeight.w700,
-                                                        fontSize: 32,
-                                                      ),
-                                                ),
-                                              ],
-                                            ),
-                                            Builder(
-                                              builder: (context) {
-                                                final humidity = thermostat
-                                                    .thermostat!.humidity;
-                                                if (humidity < 40) {
-                                                  return const Text('Low',
-                                                      style: TextStyle(
-                                                          color: Colors.orange,
-                                                          fontSize: 12));
-                                                } else if (humidity > 60) {
-                                                  return const Text('High',
-                                                      style: TextStyle(
-                                                          color: Colors.blue,
-                                                          fontSize: 12));
-                                                } else {
-                                                  return const Text('Normal',
-                                                      style: TextStyle(
-                                                          color: Colors.green,
-                                                          fontSize: 12,
-                                                          fontWeight:
-                                                              FontWeight.bold));
-                                                }
-                                              },
-                                            ),
-                                          ],
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(height: 10),
-                                Text(
-                                  'Target Temperature',
-                                  style:
-                                      Theme.of(context).textTheme.titleMedium,
-                                  textAlign: TextAlign.center,
-                                ),
-                                const SizedBox(height: 6),
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    IconButton(
-                                      icon: const Icon(
-                                          Icons.remove_circle_outline),
-                                      onPressed: () {
-                                        if (thermostat
-                                                .thermostat!.targetTemperature >
-                                            10.0) {
-                                          thermostat.updateTemperature(
-                                              thermostat.thermostat!
-                                                      .targetTemperature -
-                                                  0.5);
-                                        }
-                                      },
-                                    ),
-                                    Text(
-                                      '${thermostat.thermostat!.targetTemperature.toStringAsFixed(1)}°C',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .displayMedium
-                                          ?.copyWith(
-                                            color: Theme.of(context)
-                                                .colorScheme
-                                                .secondary,
-                                          ),
-                                    ),
-                                    IconButton(
-                                      icon:
-                                          const Icon(Icons.add_circle_outline),
-                                      onPressed: () {
-                                        if (thermostat
-                                                .thermostat!.targetTemperature <
-                                            30.0) {
-                                          thermostat.updateTemperature(
-                                              thermostat.thermostat!
-                                                      .targetTemperature +
-                                                  0.5);
-                                        }
-                                      },
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 8),
-                                Slider(
-                                  value:
-                                      thermostat.thermostat!.targetTemperature,
-                                  min: 10.0,
-                                  max: 30.0,
-                                  divisions: 40,
-                                  label: thermostat
-                                      .thermostat!.targetTemperature
-                                      .round()
-                                      .toString(),
-                                  onChanged: thermostat.updateTemperature,
-                                ),
-                              ],
-                            ),
-                          ),
+                        ThermostatSummary(
+                          temperature:
+                              thermostat.thermostat!.currentTemperature,
+                          humidity: thermostat.thermostat!.humidity,
+                          target: thermostat.thermostat!.targetTemperature,
+                          onTargetChanged: thermostat.updateTemperature,
                         ),
-                        const SizedBox(height: 8),
+                        const SizedBox(height: 16),
                         ModeSelector(
                           mode: thermostat.thermostat!.mode,
                           onModeChanged: thermostat.updateMode,
                         ),
-                        const SizedBox(height: 8),
+                        const SizedBox(height: 16),
                         Card(
-                          elevation: 2,
+                          elevation: 0,
                           child: Padding(
                             padding: const EdgeInsets.all(16),
                             child: Row(
@@ -388,9 +197,9 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           ),
                         ),
-                        const SizedBox(height: 8),
+                        const SizedBox(height: 16),
                         const WeatherCard(),
-                        const SizedBox(height: 8),
+                        const SizedBox(height: 16),
                       ],
                     );
                   },

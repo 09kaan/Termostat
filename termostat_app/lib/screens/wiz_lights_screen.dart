@@ -28,7 +28,11 @@ class WizLightsScreenState extends State<WizLightsScreen> {
   String? _owner;
   String? _roomLightId;
   DatabaseReference? _home;
-  Stream<DatabaseEvent>? _events;
+  StreamSubscription<DatabaseEvent>? _homeSubscription;
+  Map<String, dynamic> _homeData = {};
+  bool _dataReady = false;
+  bool _dataError = false;
+  int _binding = 0;
   StreamSubscription<User?>? _auth;
   StreamSubscription<DatabaseEvent>? _offset;
   StreamSubscription<DatabaseEvent>? _connection;
@@ -62,27 +66,43 @@ class WizLightsScreenState extends State<WizLightsScreen> {
     });
   }
 
-  void _bindUser(User? user) {
-    if (_owner == user?.uid && _home != null) return;
-    void apply() {
+  void _bindUser(User? user, {bool force = false}) {
+    if (!force && _owner == user?.uid && _home != null) return;
+    final binding = ++_binding;
+    _homeSubscription?.cancel();
+    _refresh(() {
       _owner = user?.uid;
       _home = user == null
           ? null
           : FirebaseDatabase.instance.ref('wizHomes/${user.uid}');
-      _events = _home?.onValue;
+      _homeData = {};
+      _dataReady = false;
+      _dataError = false;
       _sending.clear();
       _roomLightId = null;
-    }
-
-    if (mounted) {
-      _refresh(apply);
-    } else {
-      apply();
-    }
+    });
+    // Native Firebase onValue is a single-subscription stream. Subscribe ONCE
+    // and share the last snapshot with the room and any number of panels.
+    _homeSubscription = _home?.onValue.listen((event) {
+      if (!mounted || binding != _binding) return;
+      _refresh(() {
+        _homeData = _map(event.snapshot.value);
+        _dataReady = true;
+        _dataError = false;
+      });
+    }, onError: (Object error, StackTrace stack) {
+      if (!mounted || binding != _binding) return;
+      _refresh(() {
+        _dataReady = true;
+        _dataError = true;
+      });
+    });
   }
 
   @override
   void dispose() {
+    _binding++;
+    _homeSubscription?.cancel();
     _auth?.cancel();
     _offset?.cancel();
     _connection?.cancel();
@@ -256,9 +276,15 @@ class WizLightsScreenState extends State<WizLightsScreen> {
             if (!lights.containsKey(id)) {
               return const Center(child: Text('Bu ampul artık kayıtlı değil.'));
             }
-            return ListView(padding: const EdgeInsets.all(16), children: [
+            return ListView(padding: const EdgeInsets.all(20), children: [
+              BridgeConnectionCard(
+                  connected: _connected,
+                  timeReady: _timeReady,
+                  bridgeOnline: bridgeOnline),
+              const SizedBox(height: 16),
               _lightCard(id, _map(lights[id]), _map(reported[id]),
-                  _map(commands[id]), bridgeOnline),
+                  _map(commands[id]), bridgeOnline,
+                  allowRemove: false),
             ]);
           }));
 
@@ -288,28 +314,28 @@ class WizLightsScreenState extends State<WizLightsScreen> {
           content) {
     if (_home == null)
       return const Center(child: Text('Önce uygulamada giriş yap.'));
-    return StreamBuilder<DatabaseEvent>(
-      key: ValueKey(_owner),
-      stream: _events,
-      builder: (context, event) {
-        if (event.hasError) {
-          return const Center(
-              child: Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Text(
-                      'Işık verileri okunamadı. Oda ayarlarından Firebase kurulumunu kontrol et.')));
-        }
-        if (!event.hasData)
-          return const Center(child: CircularProgressIndicator());
-        final data = _map(event.data!.snapshot.value);
-        final lights = _map(_map(data['config'])['lights']);
-        final status = _map(data['status']);
-        final bridgeOnline =
-            _connected && _fresh(_map(status['bridge'])['lastSeen'], 90000);
-        return content(lights, _map(status['lights']), _map(data['commands']),
-            bridgeOnline);
-      },
-    );
+    if (_dataError) {
+      return Center(
+          child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                const Text(
+                    'Işık verileri okunamadı. Firebase izinlerini ve internet bağlantısını kontrol et.'),
+                const SizedBox(height: 16),
+                OutlinedButton(
+                    onPressed: () => _bindUser(
+                        FirebaseAuth.instance.currentUser,
+                        force: true),
+                    child: const Text('Yeniden dene')),
+              ])));
+    }
+    if (!_dataReady) return const Center(child: CircularProgressIndicator());
+    final lights = _map(_map(_homeData['config'])['lights']);
+    final status = _map(_homeData['status']);
+    final bridgeOnline =
+        _connected && _fresh(_map(status['bridge'])['lastSeen'], 90000);
+    return content(lights, _map(status['lights']), _map(_homeData['commands']),
+        bridgeOnline);
   }
 
   @override
@@ -340,6 +366,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
         final ids = lights.keys.toList()..sort();
         return RoomSettingsContent(
           connected: _connected,
+          timeReady: _timeReady,
           bridgeOnline: bridgeOnline,
           owner: _owner ?? '',
           lights: {
@@ -412,7 +439,8 @@ class WizLightsScreenState extends State<WizLightsScreen> {
       Map<String, dynamic> config,
       Map<String, dynamic> report,
       Map<String, dynamic> command,
-      bool bridgeOnline) {
+      bool bridgeOnline,
+      {bool allowRemove = true}) {
     final name = config['name'] as String? ?? 'Ampul';
     final fresh = bridgeOnline &&
         report['online'] == true &&
@@ -421,8 +449,10 @@ class WizLightsScreenState extends State<WizLightsScreen> {
     final knownState = fresh && report['state'] is bool;
     final applied =
         command['id'] != null && report['lastCommandId'] == command['id'];
-    final pending =
-        command['id'] != null && !applied && _fresh(command['issuedAt'], 60000);
+    final pending = _sending.contains(id) ||
+        (command['id'] != null &&
+            !applied &&
+            _fresh(command['issuedAt'], 60000));
     final text = pending
         ? 'Ampul yanıtı bekleniyor'
         : applied && report['commandStatus'] == 'expired'
@@ -458,10 +488,11 @@ class WizLightsScreenState extends State<WizLightsScreen> {
               Expanded(
                   child: Text(name,
                       style: Theme.of(context).textTheme.titleMedium)),
-              IconButton(
-                  onPressed: () => _remove(id, name),
-                  icon: const Icon(Icons.delete_outline),
-                  tooltip: 'Ampulü kaldır'),
+              if (allowRemove)
+                IconButton(
+                    onPressed: () => _remove(id, name),
+                    icon: const Icon(Icons.delete_outline),
+                    tooltip: 'Ampulü kaldır'),
             ]),
             Text(text),
             Text(config['ip'] as String? ?? '',

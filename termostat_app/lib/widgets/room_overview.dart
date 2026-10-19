@@ -313,22 +313,24 @@ class RoomPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) => SizedBox(
         height: MediaQuery.sizeOf(context).height * .88,
-        child: Column(children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(24, 12, 12, 12),
-            child: Row(children: [
-              Expanded(
-                  child: Text(title,
-                      style: Theme.of(context).textTheme.titleLarge)),
-              IconButton(
-                  tooltip: 'Kapat',
-                  onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.close)),
-            ]),
-          ),
-          const Divider(height: 1),
-          Expanded(child: child),
-        ]),
+        child: Material(
+            color: Theme.of(context).colorScheme.surface,
+            child: Column(children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 12, 12, 12),
+                child: Row(children: [
+                  Expanded(
+                      child: Text(title,
+                          style: Theme.of(context).textTheme.titleLarge)),
+                  IconButton(
+                      tooltip: 'Kapat',
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(Icons.close)),
+                ]),
+              ),
+              const Divider(height: 1),
+              Expanded(child: child),
+            ])),
       );
 }
 
@@ -337,6 +339,7 @@ class RoomSettingsContent extends StatelessWidget {
   const RoomSettingsContent({
     super.key,
     required this.connected,
+    this.timeReady = true,
     required this.bridgeOnline,
     required this.owner,
     required this.lights,
@@ -347,6 +350,7 @@ class RoomSettingsContent extends StatelessWidget {
     required this.controls,
   });
   final bool connected;
+  final bool timeReady;
   final bool bridgeOnline;
   final String owner;
   final Map<String, String> lights;
@@ -360,17 +364,10 @@ class RoomSettingsContent extends StatelessWidget {
   Widget build(BuildContext context) => ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          Card(
-              child: ListTile(
-            leading: Icon(bridgeOnline ? Icons.hub : Icons.cloud_off),
-            title: Text(!connected
-                ? 'Telefonun Firebase bağlantısı yok'
-                : bridgeOnline
-                    ? 'ESP köprüsü yanıt veriyor'
-                    : 'ESP köprüsünden güncel yanıt yok'),
-            subtitle: const Text(
-                'Komutlar Firebase üzerinden evdeki ESP’ye iletilir.'),
-          )),
+          BridgeConnectionCard(
+              connected: connected,
+              timeReady: timeReady,
+              bridgeOnline: bridgeOnline),
           const SizedBox(height: 16),
           if (lights.isNotEmpty)
             DropdownButtonFormField<String>(
@@ -418,4 +415,66 @@ class RoomSettingsContent extends StatelessWidget {
           ...controls,
         ],
       );
+}
+
+/// The badge means a recent ESP heartbeat, not proof that a lamp command ran.
+class BridgeConnectionCard extends StatelessWidget {
+  const BridgeConnectionCard(
+      {super.key,
+      required this.connected,
+      required this.timeReady,
+      required this.bridgeOnline});
+  final bool connected;
+  final bool timeReady;
+  final bool bridgeOnline;
+
+  @override
+  Widget build(BuildContext context) {
+    final verified = connected && timeReady && bridgeOnline;
+    final colors = Theme.of(context).colorScheme;
+    return Card(
+      key: const ValueKey('bridge-connection'),
+      child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                  verified
+                      ? Icons.check_circle_outline
+                      : Icons.cloud_off_outlined,
+                  color: verified
+                      ? (Theme.of(context).brightness == Brightness.dark
+                          ? const Color(0xFF8FD0B4)
+                          : const Color(0xFF256548))
+                      : colors.onSurfaceVariant),
+              const SizedBox(width: 12),
+              Expanded(
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                    Text(
+                        !connected
+                            ? 'Telefonun Firebase bağlantısı yok'
+                            : !timeReady
+                                ? 'Bağlantı doğrulanıyor'
+                                : verified
+                                    ? 'ESP köprüsü yanıt veriyor'
+                                    : 'ESP köprüsünden güncel yanıt yok',
+                        style: Theme.of(context).textTheme.titleMedium),
+                    const SizedBox(height: 6),
+                    Text(
+                        verified
+                            ? 'Son 90 saniye içinde cihaz bildirimi alındı.'
+                            : !connected
+                                ? 'Telefonun internet bağlantısını kontrol et.'
+                                : !timeReady
+                                    ? 'Sunucu saati alındığında cihazın güncelliği doğrulanır.'
+                                    : 'ESP’nin internet bağlantısını ve çalıştığını kontrol et.',
+                        style: Theme.of(context).textTheme.bodyMedium),
+                  ])),
+            ],
+          )),
+    );
+  }
 }

@@ -46,8 +46,10 @@ class MyApp extends StatelessWidget {
           return MaterialApp(
             title: 'Smart Thermostat',
             debugShowCheckedModeBanner: false,
-            theme: AppTheme.light,
-            darkTheme: AppTheme.dark,
+            theme:
+                AppTheme.forAppearance(settings.appearance, Brightness.light),
+            darkTheme:
+                AppTheme.forAppearance(settings.appearance, Brightness.dark),
             themeMode:
                 settings.theme == 'dark' ? ThemeMode.dark : ThemeMode.light,
             home: auth.isLoggedIn ? const HomeScreen() : const LoginScreen(),

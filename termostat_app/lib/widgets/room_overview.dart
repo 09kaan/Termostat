@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../theme/app_theme.dart';
 
 /// Full-page, interactive and editable room scene. Device reports, not commands,
 /// determine its lighting. Installation belongs in the separate settings sheet.
@@ -92,6 +93,7 @@ class RoomOverview extends StatelessWidget {
                   CustomPaint(
                       painter: _RoomPainter(
                     dark: dark,
+                    warm: AppAppearance.isWarm(context),
                     isLightOn: isLightOn,
                     fontFamily: theme.textTheme.bodyMedium?.fontFamily,
                   )),
@@ -195,8 +197,12 @@ class _Reading extends StatelessWidget {
 
 class _RoomPainter extends CustomPainter {
   const _RoomPainter(
-      {required this.dark, required this.isLightOn, this.fontFamily});
+      {required this.dark,
+      this.warm = false,
+      required this.isLightOn,
+      this.fontFamily});
   final bool dark;
+  final bool warm;
   final bool? isLightOn;
   final String? fontFamily;
 
@@ -215,19 +221,29 @@ class _RoomPainter extends CustomPainter {
     final floor = _polygon([back, right, front, left]);
     final lit = isLightOn == true;
     final off = isLightOn == false;
-    final floorColor = dark
-        ? (lit ? const Color(0xFF897855) : const Color(0xFF494D54))
-        : (lit
-            ? const Color(0xFFE8D4AC)
-            : off
-                ? const Color(0xFFB9BEC7)
-                : const Color(0xFFD7D6D2));
-    final wallLeft = dark
-        ? (lit ? const Color(0xFF77715F) : const Color(0xFF444A53))
-        : (lit ? const Color(0xFFF2E6CC) : const Color(0xFFD9DEE4));
-    final wallRight = dark
-        ? (lit ? const Color(0xFF655F50) : const Color(0xFF353C47))
-        : (lit ? const Color(0xFFE3D6B9) : const Color(0xFFC9D0DA));
+    final floorColor = warm
+        ? (dark
+            ? const Color(0xFF625142)
+            : lit
+                ? const Color(0xFFE8D4AC)
+                : const Color(0xFFE1D6C2))
+        : dark
+            ? (lit ? const Color(0xFF897855) : const Color(0xFF494D54))
+            : (lit
+                ? const Color(0xFFE8D4AC)
+                : off
+                    ? const Color(0xFFB9BEC7)
+                    : const Color(0xFFD7D6D2));
+    final wallLeft = warm
+        ? (dark ? const Color(0xFF6F5D4C) : const Color(0xFFE9DFCC))
+        : dark
+            ? (lit ? const Color(0xFF77715F) : const Color(0xFF444A53))
+            : (lit ? const Color(0xFFF2E6CC) : const Color(0xFFD9DEE4));
+    final wallRight = warm
+        ? (dark ? const Color(0xFF57483D) : const Color(0xFFDAD0BB))
+        : dark
+            ? (lit ? const Color(0xFF655F50) : const Color(0xFF353C47))
+            : (lit ? const Color(0xFFE3D6B9) : const Color(0xFFC9D0DA));
     final outline = Paint()
       ..color = dark ? const Color(0xFF9DA5AF) : const Color(0xFF788390)
       ..style = PaintingStyle.stroke
@@ -299,6 +315,7 @@ class _RoomPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _RoomPainter oldDelegate) =>
       oldDelegate.dark != dark ||
+      oldDelegate.warm != warm ||
       oldDelegate.isLightOn != isLightOn ||
       oldDelegate.fontFamily != fontFamily;
 }

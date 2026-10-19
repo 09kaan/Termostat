@@ -12,7 +12,9 @@ class SettingsProvider extends ChangeNotifier {
   double hysteresis = 0.5;
   int overrideTimeout = 60; // in minutes
   String _theme = 'light'; // Default theme is light
-  
+  String _appearance = 'original';
+  Future<void> _appearanceWrite = Future<void>.value();
+
   // Geofence settings
   double _homeLatitude = AppConstants.defaultHomeLatitude;
   double _homeLongitude = AppConstants.defaultHomeLongitude;
@@ -30,12 +32,14 @@ class SettingsProvider extends ChangeNotifier {
   bool get exitHeating => _exitHeating;
   Set<String> get exitLightIds {
     final uid = FirebaseAuth.instance.currentUser?.uid;
-    return Set<String>.unmodifiable(_exitLightsByOwner[uid]?.keys ?? <String>[]);
+    return Set<String>.unmodifiable(
+        _exitLightsByOwner[uid]?.keys ?? <String>[]);
   }
 
   Map<String, String> get exitLightIPs {
     final uid = FirebaseAuth.instance.currentUser?.uid;
-    return Map<String, String>.unmodifiable(_exitLightsByOwner[uid] ?? <String, String>{});
+    return Map<String, String>.unmodifiable(
+        _exitLightsByOwner[uid] ?? <String, String>{});
   }
 
   Future<void> setExitHeating(bool value) async {
@@ -47,16 +51,21 @@ class SettingsProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> setExitLightSelected(String ownerUid, String id, bool selected, {String? ip}) async {
+  Future<void> setExitLightSelected(String ownerUid, String id, bool selected,
+      {String? ip}) async {
     if (FirebaseAuth.instance.currentUser?.uid != ownerUid ||
         !RegExp(r'^lamp[1-8]$').hasMatch(id)) return;
-    final next = Map<String, String>.from(_exitLightsByOwner[ownerUid] ?? <String, String>{});
+    final next = Map<String, String>.from(
+        _exitLightsByOwner[ownerUid] ?? <String, String>{});
     if (selected) {
       if (ip == null || ip.isEmpty) throw StateError('Ampul IP bilgisi yok');
       next[id] = ip;
-    } else { next.remove(id); }
+    } else {
+      next.remove(id);
+    }
     final prefs = await SharedPreferences.getInstance();
-    if (!await prefs.setString('geofence_exit_lights_$ownerUid', jsonEncode(next))) {
+    if (!await prefs.setString(
+        'geofence_exit_lights_$ownerUid', jsonEncode(next))) {
       throw StateError('Ayar kaydedilemedi');
     }
     _exitLightsByOwner[ownerUid] = next;
@@ -66,7 +75,8 @@ class SettingsProvider extends ChangeNotifier {
   bool get isLoading => _isLoading;
   String? get error => _error;
   String get theme => _theme; // Getter for the theme
-  
+  String get appearance => _appearance;
+
   // Geofence getters
   double get homeLatitude => _homeLatitude;
   double get homeLongitude => _homeLongitude;
@@ -83,11 +93,16 @@ class SettingsProvider extends ChangeNotifier {
       hysteresis = prefs.getDouble('hysteresis') ?? 0.5;
       overrideTimeout = prefs.getInt('overrideTimeout') ?? 60;
       _theme = prefs.getString('theme') ?? 'light';
-      
+      final appearance = prefs.getString('app_appearance_v1');
+      _appearance = appearance == 'warm_minimal' ? 'warm_minimal' : 'original';
+
       // Load geofence settings
-      _homeLatitude = prefs.getDouble('homeLatitude') ?? AppConstants.defaultHomeLatitude;
-      _homeLongitude = prefs.getDouble('homeLongitude') ?? AppConstants.defaultHomeLongitude;
-      _homeRadiusMeters = prefs.getDouble('homeRadiusMeters') ?? AppConstants.defaultHomeRadiusMeters;
+      _homeLatitude =
+          prefs.getDouble('homeLatitude') ?? AppConstants.defaultHomeLatitude;
+      _homeLongitude =
+          prefs.getDouble('homeLongitude') ?? AppConstants.defaultHomeLongitude;
+      _homeRadiusMeters = prefs.getDouble('homeRadiusMeters') ??
+          AppConstants.defaultHomeRadiusMeters;
       _geofenceEnabled = prefs.getBool('geofenceEnabled') ?? true;
       _exitHeating = prefs.getBool('geofence_exit_heating') ?? true;
       const prefix = 'geofence_exit_lights_';
@@ -97,12 +112,13 @@ class SettingsProvider extends ChangeNotifier {
           if (raw is Map) {
             _exitLightsByOwner[key.substring(prefix.length)] = {
               for (final entry in raw.entries)
-                if (entry.key is String && entry.value is String &&
+                if (entry.key is String &&
+                    entry.value is String &&
                     RegExp(r'^lamp[1-8]$').hasMatch(entry.key as String))
                   entry.key as String: entry.value as String,
             };
           }
-        } catch (_) { /* Invalid saved selection stays unselected. */ }
+        } catch (_) {/* Invalid saved selection stays unselected. */}
       }
     } catch (e) {
       _error = e.toString();
@@ -124,6 +140,40 @@ class SettingsProvider extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt('overrideTimeout', value);
     notifyListeners();
+  }
+
+  /// Appearance is independent of the existing light/dark setting. Serialize
+  /// writes so rapid taps cannot leave a different style saved on disk.
+  Future<void> setAppearance(String value) {
+    if (value != 'original' && value != 'warm_minimal') {
+      return Future<void>.error(ArgumentError.value(value, 'appearance'));
+    }
+    final operation = _appearanceWrite.then((_) async {
+      await ready;
+      if (_appearance == value) return;
+      final prefs = await SharedPreferences.getInstance();
+      final previous = prefs.getString('app_appearance_v1');
+      try {
+        if (!await prefs.setString('app_appearance_v1', value)) {
+          throw StateError('Tema kaydedilemedi');
+        }
+      } catch (_) {
+        // SharedPreferences updates its in-memory cache before disk writes.
+        // Restore that cache as well if persistence fails.
+        try {
+          if (previous == null) {
+            await prefs.remove('app_appearance_v1');
+          } else {
+            await prefs.setString('app_appearance_v1', previous);
+          }
+        } catch (_) {/* Keep the visible setting unchanged. */}
+        rethrow;
+      }
+      _appearance = value;
+      notifyListeners();
+    });
+    _appearanceWrite = operation.catchError((Object error) {});
+    return operation;
   }
 
   Future<void> setTheme(String value) async {

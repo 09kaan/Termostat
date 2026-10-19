@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../theme/app_theme.dart';
 
 /// One stable shell and one horizontal pager for every main section.
 /// Physical left-to-right order: Log | Odam | Termostat | Takvim.
@@ -34,7 +35,7 @@ class _HomePagerState extends State<HomePager> {
     return Scaffold(
       appBar: AppBar(
         title: Text(_titles[_index]),
-        centerTitle: false,
+        centerTitle: !AppAppearance.isWarm(context),
         actions: [
           IconButton(
             key: const ValueKey('section-settings'),

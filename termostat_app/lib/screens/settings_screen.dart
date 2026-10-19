@@ -5,6 +5,7 @@ import '../providers/settings_provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/geofence_service.dart';
 import '../widgets/geofence_exit_options.dart';
+import '../widgets/appearance_selector.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -94,15 +95,19 @@ class SettingsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Settings'),
+        title: const Text('Ayarlar'),
       ),
       body: Consumer<SettingsProvider>(
         builder: (context, settings, child) {
           return ListView(
             padding: const EdgeInsets.all(16.0),
             children: [
+              AppearanceSelector(
+                  value: settings.appearance,
+                  onChanged: settings.setAppearance),
+              const SizedBox(height: 16),
               ListTile(
-                title: const Text('Dark Mode'),
+                title: const Text('Koyu mod'),
                 trailing: Switch(
                   value: settings.theme == 'dark',
                   onChanged: (isOn) {
@@ -123,7 +128,9 @@ class SettingsScreen extends StatelessWidget {
               ),
               ListTile(
                 title: const Text('GPS Geofence'),
-                subtitle: Text(settings.geofenceEnabled ? 'Aktif — konum takibi açık' : 'Kapalı'),
+                subtitle: Text(settings.geofenceEnabled
+                    ? 'Aktif — konum takibi açık'
+                    : 'Kapalı'),
                 trailing: Switch(
                   value: settings.geofenceEnabled,
                   onChanged: (isOn) {
@@ -141,11 +148,14 @@ class SettingsScreen extends StatelessWidget {
                         ? '${(dist / 1000).toStringAsFixed(1)} km'
                         : '${dist.toStringAsFixed(0)} m';
                     final statusIcon = geo.isInsideGeofence ? '🏠' : '🚶';
-                    final statusText = geo.isInsideGeofence ? 'Evdesiniz' : 'Dışarıdasınız';
+                    final statusText =
+                        geo.isInsideGeofence ? 'Evdesiniz' : 'Dışarıdasınız';
                     return ListTile(
-                      leading: Text(statusIcon, style: const TextStyle(fontSize: 24)),
+                      leading: Text(statusIcon,
+                          style: const TextStyle(fontSize: 24)),
                       title: Text('$statusText — $distText'),
-                      subtitle: Text(geo.lastAutomationMessage ?? 'iOS konum olayları izleniyor'),
+                      subtitle: Text(geo.lastAutomationMessage ??
+                          'iOS konum olayları izleniyor'),
                     );
                   },
                 ),

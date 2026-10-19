@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import '../theme/app_theme.dart';
 import 'package:provider/provider.dart';
 import '../providers/thermostat_provider.dart';
 import '../providers/settings_provider.dart';
@@ -24,6 +26,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final _roomKey = GlobalKey<WizLightsScreenState>();
+  String? _lastGeofenceConfiguration;
   final ThermostatGeofenceService _geofenceService =
       ThermostatGeofenceService();
   final DeepLinkService _deepLinkService = DeepLinkService();
@@ -36,7 +39,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
     // Listen to settings changes to update geofence
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       final settings = Provider.of<SettingsProvider>(context, listen: false);
+      _lastGeofenceConfiguration = _geofenceConfiguration(settings);
       settings.addListener(_onSettingsChanged);
     });
   }
@@ -62,9 +67,21 @@ class _HomeScreenState extends State<HomeScreen> {
     await _deepLinkService.initialize(context);
   }
 
+  String _geofenceConfiguration(SettingsProvider settings) => jsonEncode([
+        settings.geofenceEnabled,
+        settings.homeLatitude,
+        settings.homeLongitude,
+        settings.homeRadiusMeters,
+        settings.exitHeating,
+        settings.exitLightIPs,
+      ]);
+
   void _onSettingsChanged() {
     if (!mounted) return;
     final settings = Provider.of<SettingsProvider>(context, listen: false);
+    final configuration = _geofenceConfiguration(settings);
+    if (configuration == _lastGeofenceConfiguration) return;
+    _lastGeofenceConfiguration = configuration;
     if (settings.geofenceEnabled && !_geofenceService.isRunning) {
       _geofenceService.start(context);
     } else if (!settings.geofenceEnabled && _geofenceService.isRunning) {
@@ -87,6 +104,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final warm = AppAppearance.isWarm(context);
     return HomePager(
       onRoomSettings: () => _roomKey.currentState?.openSettings(),
       onAppSettings: () => Navigator.pushNamed(context, '/settings'),
@@ -95,7 +113,9 @@ class _HomeScreenState extends State<HomeScreen> {
         WizLightsScreen(key: _roomKey, embedded: true),
         SingleChildScrollView(
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(20.0, 12.0, 20.0, 24.0),
+            padding: warm
+                ? const EdgeInsets.fromLTRB(20, 12, 20, 24)
+                : const EdgeInsets.fromLTRB(16, 0, 16, 0),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -128,14 +148,20 @@ class _HomeScreenState extends State<HomeScreen> {
                           target: thermostat.thermostat!.targetTemperature,
                           onTargetChanged: thermostat.updateTemperature,
                         ),
-                        const SizedBox(height: 16),
-                        ModeSelector(
-                          mode: thermostat.thermostat!.mode,
-                          onModeChanged: thermostat.updateMode,
-                        ),
-                        const SizedBox(height: 16),
+                        SizedBox(height: warm ? 16 : 8),
+                        if (warm)
+                          WarmModeSelector(
+                            mode: thermostat.thermostat!.mode,
+                            onModeChanged: thermostat.updateMode,
+                          )
+                        else
+                          ModeSelector(
+                            mode: thermostat.thermostat!.mode,
+                            onModeChanged: thermostat.updateMode,
+                          ),
+                        SizedBox(height: warm ? 16 : 8),
                         Card(
-                          elevation: 0,
+                          elevation: warm ? 0 : 2,
                           child: Padding(
                             padding: const EdgeInsets.all(16),
                             child: Row(
@@ -197,9 +223,9 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           ),
                         ),
-                        const SizedBox(height: 16),
+                        SizedBox(height: warm ? 16 : 8),
                         const WeatherCard(),
-                        const SizedBox(height: 16),
+                        SizedBox(height: warm ? 16 : 8),
                       ],
                     );
                   },

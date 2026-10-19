@@ -7,7 +7,8 @@ import 'package:table_calendar/table_calendar.dart';
 import 'package:intl/intl.dart';
 
 class ScheduleListScreen extends StatefulWidget {
-  const ScheduleListScreen({super.key});
+  const ScheduleListScreen({super.key, this.embedded = false});
+  final bool embedded;
 
   @override
   State<ScheduleListScreen> createState() => _ScheduleListScreenState();
@@ -287,204 +288,211 @@ class _ScheduleListScreenState extends State<ScheduleListScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Schedules'),
-      ),
-      body: Consumer<ScheduleProvider>(
-        builder: (context, scheduleProvider, _) {
-          if (scheduleProvider.isLoading) {
-            return const Center(child: CircularProgressIndicator());
-          }
+    final body = Consumer<ScheduleProvider>(
+      builder: (context, scheduleProvider, _) {
+        if (scheduleProvider.isLoading) {
+          return const Center(child: CircularProgressIndicator());
+        }
 
-          if (scheduleProvider.error != null) {
-            return Center(child: Text('Error: ${scheduleProvider.error}'));
-          }
+        if (scheduleProvider.error != null) {
+          return Center(child: Text('Error: ${scheduleProvider.error}'));
+        }
 
-          if (scheduleProvider.schedules.isEmpty) {
-            return const Center(
-              child: Text(
-                  'No schedules available. Tap the + button to create one.'),
-            );
-          }
+        if (scheduleProvider.schedules.isEmpty) {
+          return const Center(
+            child:
+                Text('No schedules available. Tap the + button to create one.'),
+          );
+        }
 
-          // Get entries for the selected day
-          final entriesForSelectedDay = _getEntriesForDay(_selectedDay!);
+        // Get entries for the selected day
+        final entriesForSelectedDay = _getEntriesForDay(_selectedDay!);
 
-          return Column(
-            children: [
-              // TableCalendar Widget
-              TableCalendar(
-                firstDay: DateTime.utc(2020, 1, 1),
-                lastDay: DateTime.utc(2030, 12, 31),
-                focusedDay: _focusedDay,
-                calendarFormat: _calendarFormat,
-                selectedDayPredicate: (day) {
-                  return isSameDay(_selectedDay, day);
-                },
-                onDaySelected: (selectedDay, focusedDay) {
-                  if (!isSameDay(_selectedDay, selectedDay)) {
-                    setState(() {
-                      _selectedDay = selectedDay;
-                      _focusedDay = focusedDay;
-                    });
-                  }
-                },
-                onFormatChanged: (format) {
-                  // Manually determine the next format based on the current format
-                  final nextFormat = _calendarFormat == CalendarFormat.month
-                      ? CalendarFormat.twoWeeks
-                      : _calendarFormat == CalendarFormat.twoWeeks
-                          ? CalendarFormat.week
-                          : CalendarFormat.month;
-
-                  // Update the state with the determined next format
-                  if (_calendarFormat != nextFormat) {
-                    setState(() {
-                      _calendarFormat = nextFormat;
-                    });
-                  }
-                },
-                onPageChanged: (focusedDay) {
-                  _focusedDay = focusedDay;
-                },
-                // Implement eventLoader to show events on days with schedules
-                eventLoader: (day) {
-                  // Determine if the given day has any relevant schedule entries
-                  final formattedDay =
-                      '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}'; // Format for comparison
-
-                  bool hasRelevantEntry =
-                      scheduleProvider.schedules.any((schedule) {
-                    return schedule.entries.any((entry) {
-                      final isRecurringEntryForDay = (entry.repeat == 'daily' ||
-                              (entry.repeat == 'weekly' &&
-                                  entry.dayOfWeek == day.weekday)) &&
-                          !entry.excludedDates.contains(formattedDay);
-                      final isOnceEntryForDay = entry.repeat == 'once' &&
-                          entry.specificDate == formattedDay;
-
-                      return isRecurringEntryForDay || isOnceEntryForDay;
-                    });
+        return Column(
+          children: [
+            // TableCalendar Widget
+            TableCalendar(
+              // The main pager owns horizontal drags. Month arrows still work.
+              availableGestures: widget.embedded
+                  ? AvailableGestures.verticalSwipe
+                  : AvailableGestures.all,
+              firstDay: DateTime.utc(2020, 1, 1),
+              lastDay: DateTime.utc(2030, 12, 31),
+              focusedDay: _focusedDay,
+              calendarFormat: _calendarFormat,
+              selectedDayPredicate: (day) {
+                return isSameDay(_selectedDay, day);
+              },
+              onDaySelected: (selectedDay, focusedDay) {
+                if (!isSameDay(_selectedDay, selectedDay)) {
+                  setState(() {
+                    _selectedDay = selectedDay;
+                    _focusedDay = focusedDay;
                   });
+                }
+              },
+              onFormatChanged: (format) {
+                // Manually determine the next format based on the current format
+                final nextFormat = _calendarFormat == CalendarFormat.month
+                    ? CalendarFormat.twoWeeks
+                    : _calendarFormat == CalendarFormat.twoWeeks
+                        ? CalendarFormat.week
+                        : CalendarFormat.month;
 
-                  // Return a dummy event list if there are relevant entries to show a dot
-                  return hasRelevantEntry ? ['event'] : [];
-                },
-                headerStyle: const HeaderStyle(formatButtonShowsNext: false),
-              ),
-              const SizedBox(height: 8.0),
-              // Show selected date title
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    'Schedule for ${DateFormat('EEE, MMM d').format(_selectedDay ?? DateTime.now())}',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
+                // Update the state with the determined next format
+                if (_calendarFormat != nextFormat) {
+                  setState(() {
+                    _calendarFormat = nextFormat;
+                  });
+                }
+              },
+              onPageChanged: (focusedDay) {
+                _focusedDay = focusedDay;
+              },
+              // Implement eventLoader to show events on days with schedules
+              eventLoader: (day) {
+                // Determine if the given day has any relevant schedule entries
+                final formattedDay =
+                    '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}'; // Format for comparison
+
+                bool hasRelevantEntry =
+                    scheduleProvider.schedules.any((schedule) {
+                  return schedule.entries.any((entry) {
+                    final isRecurringEntryForDay = (entry.repeat == 'daily' ||
+                            (entry.repeat == 'weekly' &&
+                                entry.dayOfWeek == day.weekday)) &&
+                        !entry.excludedDates.contains(formattedDay);
+                    final isOnceEntryForDay = entry.repeat == 'once' &&
+                        entry.specificDate == formattedDay;
+
+                    return isRecurringEntryForDay || isOnceEntryForDay;
+                  });
+                });
+
+                // Return a dummy event list if there are relevant entries to show a dot
+                return hasRelevantEntry ? ['event'] : [];
+              },
+              headerStyle: const HeaderStyle(formatButtonShowsNext: false),
+            ),
+            const SizedBox(height: 8.0),
+            // Show selected date title
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16.0),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Schedule for ${DateFormat('EEE, MMM d').format(_selectedDay ?? DateTime.now())}',
+                  style: Theme.of(context).textTheme.titleMedium,
                 ),
               ),
-              const SizedBox(height: 8.0),
-              // Display entries for the selected day
-              Expanded(
-                child: entriesForSelectedDay.isEmpty
-                    ? const Center(child: Text('No schedules for this day.'))
-                    : ListView.builder(
-                        padding: const EdgeInsets.all(16.0),
-                        itemCount: entriesForSelectedDay.length,
-                        itemBuilder: (context, index) {
-                          final entry = entriesForSelectedDay[index];
-                          // Determine if this entry is the currently active one
-                          final activeEntry =
-                              scheduleProvider.findActiveScheduleEntry();
-                          final isEntryActive =
-                              activeEntry != null && activeEntry.id == entry.id;
+            ),
+            const SizedBox(height: 8.0),
+            // Display entries for the selected day
+            Expanded(
+              child: entriesForSelectedDay.isEmpty
+                  ? const Center(child: Text('No schedules for this day.'))
+                  : ListView.builder(
+                      padding: const EdgeInsets.all(16.0),
+                      itemCount: entriesForSelectedDay.length,
+                      itemBuilder: (context, index) {
+                        final entry = entriesForSelectedDay[index];
+                        // Determine if this entry is the currently active one
+                        final activeEntry =
+                            scheduleProvider.findActiveScheduleEntry();
+                        final isEntryActive =
+                            activeEntry != null && activeEntry.id == entry.id;
 
-                          // Display entry details as ListTile
-                          return Card(
-                            margin: const EdgeInsets.only(bottom: 8.0),
-                            child: ListTile(
-                              leading: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  // LED indicator
-                                  Container(
-                                    width: 10,
-                                    height: 10,
-                                    decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      color: isEntryActive
-                                          ? Colors.green
-                                          : Colors.grey,
-                                    ),
+                        // Display entry details as ListTile
+                        return Card(
+                          margin: const EdgeInsets.only(bottom: 8.0),
+                          child: ListTile(
+                            leading: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                // LED indicator
+                                Container(
+                                  width: 10,
+                                  height: 10,
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: isEntryActive
+                                        ? Colors.green
+                                        : Colors.grey,
                                   ),
-                                  const SizedBox(
-                                      width:
-                                          8), // Spacing between LED and CircleAvatar
-                                  CircleAvatar(
-                                      child: Text(
-                                          _getDayInitial(entry.dayOfWeek))),
-                                ],
-                              ),
-                              title: Text(
-                                  '${_formatTimeOfDay(entry.startTime)} - ${_formatTimeOfDay(entry.endTime)}'),
-                              subtitle: Text((entry.mode == 'heating_on'
-                                      ? 'Heating on'
-                                      : entry.mode == 'heating_off'
-                                          ? 'Heating off'
-                                          : 'Manual control') +
-                                  (entry.mode == 'heating_on'
-                                      ? ' at ${entry.targetTemperature}°'
-                                      : '') +
-                                  (entry.repeat == 'weekly'
-                                      ? ' (Weekly)'
-                                      : entry.repeat == 'daily'
-                                          ? ' (Daily)'
-                                          : ' (Once)')),
-                              trailing: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  IconButton(
-                                    icon: const Icon(Icons.edit),
-                                    tooltip: 'Edit Entry',
-                                    onPressed: () {
-                                      // Pass scheduleId and entry to edit handler
-                                      _editScheduleEntry(
-                                          entry.scheduleId, entry);
-                                    },
-                                  ),
-                                  IconButton(
-                                    icon: const Icon(Icons.delete),
-                                    tooltip: 'Delete Entry',
-                                    onPressed: () {
-                                      // Pass context, scheduleId, entry, and selectedDay to delete handler
-                                      _showDeleteConfirmation(
-                                          context,
-                                          entry.scheduleId,
-                                          entry,
-                                          _selectedDay!);
-                                    },
-                                  ),
-                                ],
-                              ),
+                                ),
+                                const SizedBox(
+                                    width:
+                                        8), // Spacing between LED and CircleAvatar
+                                CircleAvatar(
+                                    child:
+                                        Text(_getDayInitial(entry.dayOfWeek))),
+                              ],
                             ),
-                          );
-                        },
-                      ),
-              ),
-            ],
-          );
-        },
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          if (!mounted) return; // Check if the widget is still mounted
-          _showAddEntryDialog(
-              context, Provider.of<ScheduleProvider>(context, listen: false));
-        },
-        child: const Icon(Icons.add),
-      ),
+                            title: Text(
+                                '${_formatTimeOfDay(entry.startTime)} - ${_formatTimeOfDay(entry.endTime)}'),
+                            subtitle: Text((entry.mode == 'heating_on'
+                                    ? 'Heating on'
+                                    : entry.mode == 'heating_off'
+                                        ? 'Heating off'
+                                        : 'Manual control') +
+                                (entry.mode == 'heating_on'
+                                    ? ' at ${entry.targetTemperature}°'
+                                    : '') +
+                                (entry.repeat == 'weekly'
+                                    ? ' (Weekly)'
+                                    : entry.repeat == 'daily'
+                                        ? ' (Daily)'
+                                        : ' (Once)')),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  icon: const Icon(Icons.edit),
+                                  tooltip: 'Edit Entry',
+                                  onPressed: () {
+                                    // Pass scheduleId and entry to edit handler
+                                    _editScheduleEntry(entry.scheduleId, entry);
+                                  },
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.delete),
+                                  tooltip: 'Delete Entry',
+                                  onPressed: () {
+                                    // Pass context, scheduleId, entry, and selectedDay to delete handler
+                                    _showDeleteConfirmation(context,
+                                        entry.scheduleId, entry, _selectedDay!);
+                                  },
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        );
+      },
+    );
+    final addButton = FloatingActionButton(
+      onPressed: () {
+        if (!mounted) return; // Check if the widget is still mounted
+        _showAddEntryDialog(
+            context, Provider.of<ScheduleProvider>(context, listen: false));
+      },
+      tooltip: 'Zamanlama ekle',
+      child: const Icon(Icons.add),
+    );
+    if (widget.embedded) {
+      return Stack(children: [
+        Positioned.fill(child: body),
+        Positioned(right: 16, bottom: 16, child: addButton),
+      ]);
+    }
+    return Scaffold(
+      appBar: AppBar(title: const Text('Takvim')),
+      body: body,
+      floatingActionButton: addButton,
     );
   }
 

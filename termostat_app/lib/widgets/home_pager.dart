@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 
 /// One stable shell and one horizontal pager for every main section.
-/// Physical left-to-right order: Log | Odam | Termostat | Takvim.
-/// A finger swipe to the RIGHT therefore goes Termostat -> Odam -> Log.
+/// Physical left-to-right order: Log | Evim | Termostat | Takvim.
+/// A finger swipe to the RIGHT therefore goes Termostat -> Evim -> Log.
 class HomePager extends StatefulWidget {
   const HomePager({
     super.key,
@@ -23,7 +23,7 @@ class HomePager extends StatefulWidget {
 class _HomePagerState extends State<HomePager> {
   final PageController _controller = PageController(initialPage: 2);
   int _index = 2;
-  static const _titles = ['Log', 'Odam', 'Termostat', 'Takvim'];
+  static const _titles = ['Log', 'Evim', 'Termostat', 'Takvim'];
   @override
   void dispose() {
     _controller.dispose();
@@ -40,7 +40,7 @@ class _HomePagerState extends State<HomePager> {
           IconButton(
             key: const ValueKey('section-settings'),
             icon: const Icon(Icons.tune),
-            tooltip: _index == 1 ? 'Oda ayarları' : 'Uygulama ayarları',
+            tooltip: _index == 1 ? 'Ev ve ampul ayarları' : 'Uygulama ayarları',
             onPressed:
                 _index == 1 ? widget.onRoomSettings : widget.onAppSettings,
           ),
@@ -56,7 +56,10 @@ class _HomePagerState extends State<HomePager> {
           onPageChanged: (index) => setState(() => _index = index),
           children: [
             for (var i = 0; i < widget.pages.length; i++)
-              _KeptPage(key: ValueKey('kept-page-$i'), child: widget.pages[i]),
+              _KeptPage(
+                  key: ValueKey('kept-page-$i'),
+                  child: MainSectionActive(
+                      active: _index == i, child: widget.pages[i])),
           ],
         ),
       ),
@@ -80,4 +83,17 @@ class _KeptPageState extends State<_KeptPage>
     super.build(context);
     return widget.child;
   }
+}
+
+/// Kept-alive offscreen rooms must not intercept the system back button.
+class MainSectionActive extends InheritedWidget {
+  const MainSectionActive(
+      {super.key, required this.active, required super.child});
+  final bool active;
+  static bool of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<MainSectionActive>()?.active ??
+      true;
+  @override
+  bool updateShouldNotify(MainSectionActive oldWidget) =>
+      active != oldWidget.active;
 }

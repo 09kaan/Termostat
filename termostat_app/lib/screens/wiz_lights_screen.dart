@@ -6,6 +6,10 @@ import 'package:firebase_database/firebase_database.dart';
 import 'package:provider/provider.dart';
 import '../providers/thermostat_provider.dart';
 import '../widgets/room_overview.dart';
+import '../widgets/home_floor_plan.dart';
+import '../widgets/home_pager.dart';
+import '../models/home_plan.dart';
+import '../services/home_plan_preferences.dart';
 
 /// WiZ commands go through an authenticated ESP bridge. No local-network
 /// permission, bulb credentials or administrative database secret in this UI.
@@ -26,7 +30,12 @@ class WizLightsScreenState extends State<WizLightsScreen> {
   }
 
   String? _owner;
-  String? _roomLightId;
+  String? _selectedRoom;
+  String? _selectedFixture;
+  Map<String, FixtureBinding> _bindings = {};
+  final _planPreferences = HomePlanPreferences();
+  bool _planReady = false;
+  bool _savingPlan = false;
   DatabaseReference? _home;
   StreamSubscription<DatabaseEvent>? _homeSubscription;
   Map<String, dynamic> _homeData = {};
@@ -79,8 +88,13 @@ class WizLightsScreenState extends State<WizLightsScreen> {
       _dataReady = false;
       _dataError = false;
       _sending.clear();
-      _roomLightId = null;
+      _selectedRoom = null;
+      _selectedFixture = null;
+      _bindings = {};
+      _planReady = user == null;
+      _savingPlan = false;
     });
+    if (user != null) _loadPlan(user.uid, binding);
     // Native Firebase onValue is a single-subscription stream. Subscribe ONCE
     // and share the last snapshot with the room and any number of panels.
     _homeSubscription = _home?.onValue.listen((event) {
@@ -98,6 +112,59 @@ class WizLightsScreenState extends State<WizLightsScreen> {
       });
     });
   }
+
+  Future<void> _loadPlan(String owner, int generation) async {
+    try {
+      final loaded = await _planPreferences.load(owner);
+      if (!mounted || generation != _binding || _owner != owner) return;
+      _refresh(() {
+        _bindings = loaded;
+        _planReady = true;
+      });
+    } catch (_) {
+      if (!mounted || generation != _binding) return;
+      _refresh(() => _planReady = true);
+      _message(
+          'Ev eşleştirmeleri okunamadı. Ayarlardan tekrar bağlayabilirsin.');
+    }
+  }
+
+  Future<void> _assignFixture(String fixture, String? lightId) async {
+    final owner = _owner;
+    if (owner == null ||
+        !_planReady ||
+        _savingPlan ||
+        FirebaseAuth.instance.currentUser?.uid != owner) return;
+    final generation = _binding;
+    final lights = _map(_map(_homeData['config'])['lights']);
+    _refresh(() => _savingPlan = true);
+    try {
+      final next =
+          HomePlanPreferences.assign(_bindings, fixture, lightId, lights);
+      await _planPreferences.save(owner, next);
+      if (!mounted || generation != _binding || _owner != owner) return;
+      _refresh(() => _bindings = next);
+    } catch (_) {
+      if (mounted && generation == _binding)
+        _message('Eşleştirme kaydedilemedi. Tekrar dene.');
+    } finally {
+      if (mounted && generation == _binding)
+        _refresh(() => _savingPlan = false);
+    }
+  }
+
+  void _enterRoom(String roomId) => _refresh(() {
+        _selectedRoom = roomId;
+        final fixtures = HomePlan.fixturesFor(roomId);
+        final lights = _map(_map(_homeData['config'])['lights']);
+        final assigned = fixtures.where((f) =>
+            HomePlanPreferences.resolve(f.id, _bindings, lights) != null);
+        _selectedFixture = assigned.firstOrNull?.id;
+      });
+  void _leaveRoom() => _refresh(() {
+        _selectedRoom = null;
+        _selectedFixture = null;
+      });
 
   @override
   void dispose() {
@@ -268,7 +335,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
   }
 
   /// The shared main header calls this; no setup clutter stays on the room.
-  void openSettings() => _openPanel('Oda ayarları', _settingsBody);
+  void openSettings() => _openPanel('Ev ve ampul ayarları', _settingsBody);
 
   void _openControls(String id) => _openPanel(
       'Işık kontrolleri',
@@ -344,21 +411,14 @@ class WizLightsScreenState extends State<WizLightsScreen> {
         _roomOverview(lights, reported, commands, bridgeOnline));
     if (widget.embedded) return body;
     return Scaffold(
-      appBar: AppBar(title: const Text('Odam'), actions: [
+      appBar: AppBar(title: const Text('Evim'), actions: [
         IconButton(
             onPressed: openSettings,
-            tooltip: 'Oda ayarları',
+            tooltip: 'Ev ve ampul ayarları',
             icon: const Icon(Icons.tune)),
       ]),
       body: SafeArea(child: body),
     );
-  }
-
-  String? _selectedLight(Map<String, dynamic> lights) {
-    if (_roomLightId != null && lights.containsKey(_roomLightId))
-      return _roomLightId;
-    final ids = lights.keys.toList()..sort();
-    return ids.isEmpty ? null : ids.first;
   }
 
   Widget _settingsBody() =>
@@ -372,8 +432,9 @@ class WizLightsScreenState extends State<WizLightsScreen> {
           lights: {
             for (final id in ids) id: _map(lights[id])['name'] as String? ?? id
           },
-          selectedLight: _selectedLight(lights),
-          onSelected: (value) => _refresh(() => _roomLightId = value),
+          selectedLight: null,
+          onSelected: (_) {},
+          planAssignments: _assignmentControls(lights),
           onAdd: () => _addLight(lights),
           onCopy: () async {
             await Clipboard.setData(ClipboardData(text: _owner ?? ''));
@@ -387,51 +448,235 @@ class WizLightsScreenState extends State<WizLightsScreen> {
         );
       });
 
-  Widget _roomOverview(
+  Widget _assignmentControls(Map<String, dynamic> lights) {
+    final ids = lights.keys.toList()..sort();
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Text('Plandaki lambaları bağla',
+          style: Theme.of(context).textTheme.titleLarge),
+      const SizedBox(height: 8),
+      const Text(
+          'Her konumu kendi ampulüne bağla. Eşleştirme bu cihazda, hesabına özel saklanır; komut göndermez. Aynı ampul yalnız bir konumda olabilir.'),
+      if (!_planReady || _savingPlan)
+        const Padding(
+            padding: EdgeInsets.all(8), child: LinearProgressIndicator()),
+      for (final f in HomePlan.fixtures)
+        Padding(
+            padding: const EdgeInsets.only(top: 16),
+            child: DropdownButtonFormField<String>(
+              key: ValueKey(
+                  'assign-${f.id}-${HomePlanPreferences.resolve(f.id, _bindings, lights) ?? ''}'),
+              value: HomePlanPreferences.resolve(f.id, _bindings, lights) ?? '',
+              isExpanded: true,
+              decoration: InputDecoration(
+                  labelText: f.name,
+                  helperText: _bindings.containsKey(f.id) &&
+                          HomePlanPreferences.resolve(
+                                  f.id, _bindings, lights) ==
+                              null
+                      ? 'Ampul/IP değişti. Yeniden eşleştir.'
+                      : null),
+              items: [
+                const DropdownMenuItem(
+                    value: '', child: Text('Eşleştirilmedi')),
+                for (final id in ids)
+                  DropdownMenuItem(
+                      value: id,
+                      child: Text('${_map(lights[id])['name'] ?? id} · $id',
+                          maxLines: 1, overflow: TextOverflow.ellipsis))
+              ],
+              onChanged: !_planReady || _savingPlan
+                  ? null
+                  : (id) => _assignFixture(f.id, id == '' ? null : id),
+            )),
+      const SizedBox(height: 12),
+      const Text(
+          'Başka konuma bağlı bir ampul seçersen önceki konumdan taşınır. WC ve küçük koridor dahil, yalnız eşleştirdiğin lambalar planda görünür.'),
+    ]);
+  }
+
+  FixtureState _fixtureState(
+      String fixture,
       Map<String, dynamic> lights,
       Map<String, dynamic> reported,
       Map<String, dynamic> commands,
       bool bridgeOnline) {
-    final id = _selectedLight(lights);
-    final config = _map(lights[id]);
-    final report = _map(reported[id]);
-    final command = _map(commands[id]);
+    final id = HomePlanPreferences.resolve(fixture, _bindings, lights);
+    if (id == null) return const FixtureState();
+    final config = _map(lights[id]),
+        report = _map(reported[id]),
+        command = _map(commands[id]);
     final fresh = _connected &&
         bridgeOnline &&
         report['online'] == true &&
         report['ip'] == config['ip'] &&
         _fresh(report['reportedAt'], 90000);
-    final bool? on =
-        fresh && report['state'] is bool ? report['state'] as bool : null;
     final applied =
         command['id'] != null && report['lastCommandId'] == command['id'];
-    final pending = id != null &&
-        (_sending.contains(id) ||
-            (command['id'] != null &&
-                !applied &&
-                _fresh(command['issuedAt'], 60000)));
-    final enabled = id != null &&
-        on != null &&
-        _connected &&
-        _timeReady &&
-        bridgeOnline &&
-        !pending;
+    final pending = _sending.contains(id) ||
+        (command['id'] != null &&
+            !applied &&
+            _fresh(command['issuedAt'], 60000));
+    final bool? on =
+        fresh && report['state'] is bool ? report['state'] as bool : null;
+    return FixtureState(
+        assigned: true,
+        on: on,
+        pending: pending,
+        controllable:
+            on != null && _connected && _timeReady && bridgeOnline && !pending);
+  }
+
+  void _togglePlanFixture(String fixture) {
+    // Re-read the current report/time at tap, not a possibly stale paint frame.
+    final lights = _map(_map(_homeData['config'])['lights']);
+    final status = _map(_homeData['status']);
+    final bridge =
+        _connected && _fresh(_map(status['bridge'])['lastSeen'], 90000);
+    final state = _fixtureState(fixture, lights, _map(status['lights']),
+        _map(_homeData['commands']), bridge);
+    final id = HomePlanPreferences.resolve(fixture, _bindings, lights);
+    if (id != null && state.controllable && state.on != null) {
+      _send(id, {'state': !state.on!});
+    }
+  }
+
+  void _controlsForFixture(String fixture) {
+    final lights = _map(_map(_homeData['config'])['lights']);
+    final id = HomePlanPreferences.resolve(fixture, _bindings, lights);
+    if (id != null) _openControls(id);
+  }
+
+  Widget _roomOverview(
+      Map<String, dynamic> lights,
+      Map<String, dynamic> reported,
+      Map<String, dynamic> commands,
+      bool bridgeOnline) {
+    final roomId = _selectedRoom;
+    final reduced = MediaQuery.of(context).disableAnimations;
+    final states = {
+      for (final f in HomePlan.fixtures)
+        f.id: _fixtureState(f.id, lights, reported, commands, bridgeOnline)
+    };
     final thermostat = context.watch<ThermostatProvider>();
-    final sensor = thermostat.thermostat;
-    final hasReading =
-        sensor != null && !thermostat.isLoading && thermostat.error == null;
-    return RoomOverview(
-      isLightOn: on,
-      pending: pending,
-      lightName: id == null ? null : config['name'] as String? ?? 'Ampul',
-      onToggle: enabled ? () => _send(id, {'state': !on}) : null,
-      onControls: id == null ? null : () => _openControls(id),
-      onSetup: openSettings,
-      temperature: hasReading && sensor.currentTemperature.isFinite
-          ? sensor.currentTemperature
-          : null,
-      humidity: hasReading && sensor.humidity.isFinite ? sensor.humidity : null,
-    );
+    Widget child;
+    if (roomId == null) {
+      child = HomeFloorPlan(
+          key: const ValueKey('home-floor-plan'),
+          states: states,
+          onRoom: _enterRoom,
+          onLampTap: _togglePlanFixture,
+          onLampControls: _controlsForFixture,
+          onSetup: openSettings);
+    } else {
+      final room = HomePlan.room(roomId),
+          fixtures = HomePlan.fixturesFor(roomId)
+              .where((f) =>
+                  HomePlanPreferences.resolve(f.id, _bindings, lights) != null)
+              .toList();
+      final fixture = fixtures.any((f) => f.id == _selectedFixture)
+          ? _selectedFixture
+          : fixtures.firstOrNull?.id;
+      final selected = fixtures.where((f) => f.id == fixture).firstOrNull;
+      final id = fixture == null
+          ? null
+          : HomePlanPreferences.resolve(fixture, _bindings, lights);
+      final state = states[fixture] ?? const FixtureState();
+      final enabled = id != null &&
+          state.on != null &&
+          _connected &&
+          _timeReady &&
+          bridgeOnline &&
+          !state.pending;
+      final sensor = thermostat.thermostat;
+      final hasReading = room.sensor &&
+          sensor != null &&
+          !thermostat.isLoading &&
+          thermostat.error == null;
+      child = Column(
+          key: ValueKey('detail-$roomId'),
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+                padding: const EdgeInsets.fromLTRB(12, 4, 16, 0),
+                child: Wrap(
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 12,
+                    children: [
+                      TextButton.icon(
+                          key: const ValueKey('back-home-plan'),
+                          onPressed: _leaveRoom,
+                          icon: const Icon(Icons.arrow_back),
+                          label: const Text('Ev planı')),
+                      Text(room.name,
+                          style: Theme.of(context).textTheme.titleLarge),
+                    ])),
+            if (fixtures.length > 1)
+              Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: Wrap(spacing: 8, runSpacing: 4, children: [
+                    for (final f in fixtures)
+                      ChoiceChip(
+                          key: ValueKey('fixture-${f.id}'),
+                          avatar: f.floor
+                              ? const FloorLampIcon(size: 18)
+                              : const Icon(Icons.lightbulb_outline, size: 18),
+                          label: Text(f.type),
+                          selected: fixture == f.id,
+                          onSelected: (_) =>
+                              _refresh(() => _selectedFixture = f.id)),
+                  ])),
+            Expanded(
+                child: RoomOverview(
+              roomName: room.name,
+              dimensions: room.dimensions,
+              area: room.area,
+              roomWidth: room.width,
+              roomDepth: room.depth,
+              showSensor: room.sensor,
+              showLamp: id != null,
+              planAspect: room.width == null || room.depth == null
+                  ? room.bounds.width / room.bounds.height
+                  : null,
+              floorLamp: selected?.floor ?? false,
+              isLightOn: state.on,
+              ambientOn: fixtures.any((f) => states[f.id]?.on == true)
+                  ? true
+                  : state.on,
+              pending: state.pending,
+              lightName: id == null
+                  ? null
+                  : '${_map(lights[id])['name'] ?? 'Ampul'} · ${selected?.type ?? ''}',
+              onToggle: enabled ? () => _send(id, {'state': !state.on!}) : null,
+              onControls: id == null ? null : () => _openControls(id),
+              onSetup: openSettings,
+              temperature: hasReading && sensor.currentTemperature.isFinite
+                  ? sensor.currentTemperature
+                  : null,
+              humidity: hasReading && sensor.humidity.isFinite
+                  ? sensor.humidity
+                  : null,
+            )),
+          ]);
+    }
+    final active = MainSectionActive.of(context);
+    return PopScope(
+        canPop: roomId == null || !active,
+        onPopInvokedWithResult: (didPop, result) {
+          if (!didPop && active && _selectedRoom != null) _leaveRoom();
+        },
+        child: AnimatedSwitcher(
+          key: const ValueKey('room-transition'),
+          duration: Duration(milliseconds: reduced ? 0 : 240),
+          reverseDuration: Duration(milliseconds: reduced ? 0 : 160),
+          // Do not keep a second interactive old room alive during the transition.
+          layoutBuilder: (current, previous) => current ?? const SizedBox(),
+          transitionBuilder: (child, animation) => FadeTransition(
+              opacity: animation,
+              child: ScaleTransition(
+                  scale: Tween<double>(begin: .97, end: 1).animate(animation),
+                  child: child)),
+          child: child,
+        ));
   }
 
   Widget _lightCard(

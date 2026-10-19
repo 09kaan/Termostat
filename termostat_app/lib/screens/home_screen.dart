@@ -8,7 +8,6 @@ import '../widgets/temperature_display.dart';
 import '../widgets/mode_selector.dart';
 import '../widgets/schedule_card.dart';
 import '../widgets/weather_card.dart';
-import '../widgets/default_page_controller.dart';
 import './schedule_list_screen.dart';
 import './wiz_lights_screen.dart';
 import './thermostat_log_screen.dart';
@@ -25,6 +24,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final PageController _pageController = PageController(initialPage: 1);
+  int _currentPage = 1;
   final ThermostatGeofenceService _geofenceService =
       ThermostatGeofenceService();
   final DeepLinkService _deepLinkService = DeepLinkService();
@@ -90,8 +90,9 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Smart Thermostat'),
+      // Schedules and lights already provide their own app bars.
+      appBar: _currentPage == 0 || _currentPage == 2 ? null : AppBar(
+        title: Text(_currentPage == 3 ? 'Log' : 'Smart Thermostat'),
         actions: [
           IconButton(
             icon: const Icon(Icons.settings),
@@ -104,8 +105,11 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       body: PageView(
         controller: _pageController,
+        onPageChanged: (page) => setState(() => _currentPage = page),
+        // Start on the thermostat. Swipe left for lights, then logs;
+        // swipe right from the thermostat for schedules.
         children: [
-          const ThermostatLogScreen(),
+          const ScheduleListScreen(),
           SingleChildScrollView(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16.0, 0.0, 16.0, 0.0),
@@ -417,8 +421,10 @@ class _HomeScreenState extends State<HomeScreen> {
                               title: const Text('WiZ ışıklar'),
                               subtitle: const Text('Ev dışından aç/kapat, parlaklık ve renk'),
                               trailing: const Icon(Icons.chevron_right),
-                              onTap: () => Navigator.of(context).push(
-                                MaterialPageRoute<void>(builder: (_) => const WizLightsScreen()),
+                              onTap: () => _pageController.animateToPage(
+                                2,
+                                duration: const Duration(milliseconds: 300),
+                                curve: Curves.easeInOut,
                               ),
                             ),
                           ),
@@ -433,7 +439,8 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           ),
-          const ScheduleListScreen(),
+          const WizLightsScreen(),
+          const ThermostatLogScreen(),
         ],
       ),
     );

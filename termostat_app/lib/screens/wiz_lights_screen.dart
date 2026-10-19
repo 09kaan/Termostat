@@ -3,6 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
+import 'package:provider/provider.dart';
+import '../providers/thermostat_provider.dart';
+import '../widgets/room_overview.dart';
 
 /// WiZ commands go through an authenticated ESP bridge. No local-network
 /// permission, bulb credentials or administrative database secret in this UI.
@@ -14,6 +17,7 @@ class WizLightsScreen extends StatefulWidget {
 
 class _WizLightsScreenState extends State<WizLightsScreen> {
   String? _owner;
+  String? _roomLightId;
   DatabaseReference? _home;
   Stream<DatabaseEvent>? _events;
   StreamSubscription<User?>? _auth;
@@ -52,6 +56,7 @@ class _WizLightsScreenState extends State<WizLightsScreen> {
       _home = user == null ? null : FirebaseDatabase.instance.ref('wizHomes/${user.uid}');
       _events = _home?.onValue;
       _sending.clear();
+      _roomLightId = null;
     }
     if (mounted) { setState(apply); } else { apply(); }
   }
@@ -194,6 +199,7 @@ class _WizLightsScreenState extends State<WizLightsScreen> {
               final commands = _map(data['commands']);
               final bridgeOnline = _fresh(_map(status['bridge'])['lastSeen'], 90000);
               return ListView(padding: const EdgeInsets.all(16), children: [
+                _roomOverview(lights, reported, commands, bridgeOnline),
                 Card(child: ListTile(
                   leading: Icon(bridgeOnline ? Icons.hub : Icons.cloud_off),
                   title: Text(!_connected ? 'Telefonun Firebase bağlantısı yok'
@@ -220,6 +226,53 @@ class _WizLightsScreenState extends State<WizLightsScreen> {
             },
           ),
     );
+  }
+
+  Widget _roomOverview(Map<String, dynamic> lights, Map<String, dynamic> reported,
+      Map<String, dynamic> commands, bool bridgeOnline) {
+    final ids = lights.keys.toList()..sort();
+    final id = lights.containsKey(_roomLightId)
+        ? _roomLightId : ids.isEmpty ? null : ids.first;
+    final config = _map(lights[id]);
+    final report = _map(reported[id]);
+    final command = _map(commands[id]);
+    final fresh = _connected && bridgeOnline && report['online'] == true
+        && report['ip'] == config['ip'] && _fresh(report['reportedAt'], 90000);
+    final bool? on = fresh && report['state'] is bool ? report['state'] as bool : null;
+    final applied = command['id'] != null && report['lastCommandId'] == command['id'];
+    final pending = id != null && (_sending.contains(id)
+        || (command['id'] != null && !applied && _fresh(command['issuedAt'], 60000)));
+    final enabled = id != null && on != null && _connected && _timeReady
+        && bridgeOnline && !pending;
+    final thermostat = context.watch<ThermostatProvider>();
+    final sensor = thermostat.thermostat;
+    final hasReading = sensor != null && !thermostat.isLoading && thermostat.error == null;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      if (ids.length > 1) Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: DropdownButtonFormField<String>(
+          key: ValueKey(id),
+          value: id,
+          isExpanded: true,
+          decoration: const InputDecoration(labelText: 'Odada gösterilen ampul'),
+          items: [for (final key in ids) DropdownMenuItem(
+            value: key,
+            child: Text(_map(lights[key])['name'] as String? ?? key,
+              maxLines: 1, overflow: TextOverflow.ellipsis),
+          )],
+          onChanged: (value) => setState(() => _roomLightId = value),
+        ),
+      ),
+      RoomOverview(
+        isLightOn: on,
+        pending: pending,
+        lightName: id == null ? null : config['name'] as String? ?? 'Ampul',
+        onToggle: enabled ? () => _send(id, {'state': !on}) : null,
+        temperature: hasReading && sensor.currentTemperature.isFinite
+            ? sensor.currentTemperature : null,
+        humidity: hasReading && sensor.humidity.isFinite ? sensor.humidity : null,
+      ),
+    ]);
   }
 
   Widget _lightCard(String id, Map<String, dynamic> config, Map<String, dynamic> report,

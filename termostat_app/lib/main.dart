@@ -3,9 +3,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:provider/provider.dart';
 import 'firebase_options.dart';
 import 'screens/home_screen.dart';
-import 'screens/schedule_list_screen.dart';
 import 'screens/login_screen.dart';
-import 'widgets/default_page_controller.dart';
 import 'providers/thermostat_provider.dart';
 import 'providers/settings_provider.dart';
 import 'providers/schedule_provider.dart';
@@ -79,15 +77,7 @@ class MyApp extends StatelessWidget {
             ),
             themeMode: settings.theme == 'dark' ? ThemeMode.dark : ThemeMode.light,
             home: auth.isLoggedIn
-                ? DefaultPageController(
-                    controller: PageController(),
-                    child: PageView(
-                      children: const [
-                        HomeScreen(),
-                        ScheduleListScreen(),
-                      ],
-                    ),
-                  )
+                ? const HomeScreen()
                 : const LoginScreen(),
             routes: {
               '/settings': (context) => const SettingsScreen(),

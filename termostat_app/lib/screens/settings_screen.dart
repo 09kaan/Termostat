@@ -4,6 +4,7 @@ import 'package:geolocator/geolocator.dart';
 import '../providers/settings_provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/geofence_service.dart';
+import '../widgets/geofence_exit_options.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -144,10 +145,11 @@ class SettingsScreen extends StatelessWidget {
                     return ListTile(
                       leading: Text(statusIcon, style: const TextStyle(fontSize: 24)),
                       title: Text('$statusText — $distText'),
-                      subtitle: const Text('iOS native geofence aktif'),
+                      subtitle: Text(geo.lastAutomationMessage ?? 'iOS konum olayları izleniyor'),
                     );
                   },
                 ),
+              const GeofenceExitOptions(),
               ListTile(
                 title: const Text('Home Location'),
                 subtitle: Text(

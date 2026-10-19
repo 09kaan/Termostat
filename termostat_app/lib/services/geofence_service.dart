@@ -1,260 +1,178 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../providers/thermostat_provider.dart';
 import '../providers/settings_provider.dart';
-import '../constants/app_constants.dart';
-import 'notifications_service.dart';
 
+/// iOS is the single command writer, including when Flutter is not running.
+/// Flutter receives state/results only; it never duplicates heating/light commands.
 class ThermostatGeofenceService extends ChangeNotifier {
-  static final ThermostatGeofenceService _instance =
-      ThermostatGeofenceService._internal();
+  static final ThermostatGeofenceService _instance = ThermostatGeofenceService._internal();
   factory ThermostatGeofenceService() => _instance;
   ThermostatGeofenceService._internal();
-
   static const _channel = MethodChannel('geofence_channel');
-
   bool _isStarted = false;
   bool _isInitialized = false;
   bool _isInsideGeofence = true;
-  double _lastDistance = 0.0;
-
-  // Store context-independent callbacks
-  ThermostatProvider? _thermostatProvider;
+  double _lastDistance = 0;
+  String? _lastAutomationMessage;
   SettingsProvider? _settingsProvider;
+  StreamSubscription<User?>? _authSubscription;
+  bool get _supported => defaultTargetPlatform == TargetPlatform.iOS;
 
-  /// Initialize the geofence service
   Future<void> initialize(BuildContext context) async {
     if (_isInitialized) return;
-
+    if (!_supported) return;
     try {
-      // Check and request location permissions
-      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        debugPrint('Location services are disabled');
-        return;
-      }
-
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) {
-          debugPrint('Location permissions denied');
-          return;
-        }
-      }
-      if (permission == LocationPermission.deniedForever) {
-        debugPrint('Location permissions permanently denied');
-        return;
-      }
-
-      // Load saved state
+      final settings = Provider.of<SettingsProvider>(context, listen: false);
+      await settings.ready;
+      if (!await Geolocator.isLocationServiceEnabled()) return;
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) return;
+      _settingsProvider = settings;
       final prefs = await SharedPreferences.getInstance();
       _isInsideGeofence = prefs.getBool('isInsideGeofence') ?? true;
-
-      // Store provider references
-      if (context.mounted) {
-        _thermostatProvider = Provider.of<ThermostatProvider>(context, listen: false);
-        _settingsProvider = Provider.of<SettingsProvider>(context, listen: false);
-      }
-
-      // Listen for native geofence events from iOS
       _channel.setMethodCallHandler(_handleNativeEvent);
-
       _isInitialized = true;
-      debugPrint('Geofence service initialized (inside=$_isInsideGeofence)');
-    } catch (e) {
-      debugPrint('Failed to initialize geofence: $e');
-    }
-  }
-
-  /// Start native iOS geofence monitoring
-  Future<void> start(BuildContext context) async {
-    if (_isStarted || !_isInitialized) return;
-
-    try {
-      if (context.mounted) {
-        _thermostatProvider = Provider.of<ThermostatProvider>(context, listen: false);
-        _settingsProvider = Provider.of<SettingsProvider>(context, listen: false);
-      }
-
-      final lat = _settingsProvider!.homeLatitude;
-      final lng = _settingsProvider!.homeLongitude;
-      final radius = _settingsProvider!.homeRadiusMeters;
-
-      // Start native iOS CLLocationManager geofencing
-      await _channel.invokeMethod('startMonitoring', {
-        'latitude': lat,
-        'longitude': lng,
-        'radius': radius,
+      _authSubscription?.cancel();
+      _authSubscription = FirebaseAuth.instance.authStateChanges().listen((user) {
+        if (user == null) {
+          unawaited(stop());
+        } else {
+          unawaited(_syncNativePolicy());
+        }
       });
+      await _syncNativePolicy();
+      _lastAutomationMessage = await _channel.invokeMethod<String>('getLastAutomationResult');
+      notifyListeners();
+    } catch (_) { debugPrint('Konum otomasyonu başlatılamadı.'); }
+  }
 
-      // Get initial distance
-      await _updateDistance();
+  Future<bool> syncExitActions() => _syncNativePolicy();
 
-      _isStarted = true;
-      debugPrint('🎯 Native geofence started: lat=$lat, lng=$lng, radius=${radius}m');
-    } catch (e) {
-      debugPrint('Failed to start native geofence: $e');
-      _isStarted = false;
+  Future<bool> _syncNativePolicy() async {
+    final settings = _settingsProvider;
+    if (!_supported || settings == null || !_isInitialized) return false;
+    await settings.ready;
+    final user = FirebaseAuth.instance.currentUser;
+    try {
+      await _channel.invokeMethod('configureExitActions', {
+        'enabled': settings.geofenceEnabled && user != null,
+        'ownerUid': user?.uid ?? '',
+        'heating': settings.exitHeating,
+        'lightIds': settings.exitLightIds.toList()..sort(),
+        'lightIPs': settings.exitLightIPs,
+      });
+      return true;
+    } catch (_) {
+      _lastAutomationMessage = 'Konum cihaz seçimleri iOS tarafına aktarılamadı. Uygulamayı yeniden aç.';
+      notifyListeners();
+      return false;
     }
   }
 
-  /// Handle events from native iOS
+  Future<void> start(BuildContext context) async {
+    if (!_isInitialized || _isStarted) return;
+    if (context.mounted) _settingsProvider = Provider.of<SettingsProvider>(context, listen: false);
+    if (!await _syncNativePolicy()) return;
+    final settings = _settingsProvider;
+    if (settings == null || !settings.geofenceEnabled || FirebaseAuth.instance.currentUser == null) return;
+    try {
+      _isStarted = await _channel.invokeMethod<bool>('startMonitoring', {
+        'latitude': settings.homeLatitude,
+        'longitude': settings.homeLongitude,
+        'radius': settings.homeRadiusMeters,
+      }) ?? false;
+      await _updateDistance();
+      notifyListeners();
+    } catch (_) { _isStarted = false; }
+  }
+
   Future<dynamic> _handleNativeEvent(MethodCall call) async {
     switch (call.method) {
       case 'onEnterRegion':
-        debugPrint('🏠 [Native] Entered home region!');
         _isInsideGeofence = true;
         _lastDistance = 0;
-        _saveState(true);
-        _handleEnterHome();
-        notifyListeners();
+        await _saveState(true);
         break;
-
       case 'onExitRegion':
-        debugPrint('🚶 [Native] Exited home region!');
         _isInsideGeofence = false;
-        _saveState(false);
-        _handleExitHome();
+        await _saveState(false);
         await _updateDistance();
-        notifyListeners();
         break;
-
       case 'onStateChanged':
         final args = call.arguments as Map?;
-        final state = args?['state'] as String? ?? 'unknown';
-        debugPrint('📍 [Native] State: $state (was inside=$_isInsideGeofence)');
-        if (state == 'inside' && !_isInsideGeofence) {
-          // Transitioned to inside — trigger enter actions
-          _isInsideGeofence = true;
-          _lastDistance = 0;
-          _saveState(true);
-          _handleEnterHome();
-        } else if (state == 'outside' && _isInsideGeofence) {
-          // Transitioned to outside — trigger exit actions
-          _isInsideGeofence = false;
-          _saveState(false);
-          _handleExitHome();
-          await _updateDistance();
-        } else if (state == 'inside') {
-          _isInsideGeofence = true;
-          _lastDistance = 0;
-        } else if (state == 'outside') {
-          _isInsideGeofence = false;
-          await _updateDistance();
+        final state = args?['state'];
+        if (state == 'inside' || state == 'outside') {
+          _isInsideGeofence = state == 'inside';
+          await _saveState(_isInsideGeofence);
+          if (_isInsideGeofence) { _lastDistance = 0; } else { await _updateDistance(); }
         }
-        notifyListeners();
+        break;
+      case 'onAutomationResult':
+        final args = call.arguments as Map?;
+        _lastAutomationMessage = args?['message'] as String?;
         break;
     }
+    notifyListeners();
     return null;
   }
 
-  /// Get current distance from home
-  Future<void> _updateDistance() async {
-    try {
-      if (_settingsProvider == null) return;
-      final distance = await _channel.invokeMethod<double>('getDistance', {
-        'latitude': _settingsProvider!.homeLatitude,
-        'longitude': _settingsProvider!.homeLongitude,
-      });
-      _lastDistance = distance ?? 0.0;
-      notifyListeners();
-    } catch (e) {
-      debugPrint('Error getting distance: $e');
-    }
-  }
-
-  /// Save geofence state to persist across app restarts
-  Future<void> _saveState(bool isInside) async {
+  Future<void> _saveState(bool inside) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool('isInsideGeofence', isInside);
-    } catch (e) {
-      debugPrint('Error saving geofence state: $e');
-    }
+      await prefs.setBool('isInsideGeofence', inside);
+    } catch (_) {}
   }
-
-  /// Handle entering home
-  Future<void> _handleEnterHome() async {
-    debugPrint('🏠 GEOFENCE: Entered home zone!');
-    await notificationsService.showNotification(
-      id: 1,
-      title: 'Termostat',
-      body: 'Eve hoş geldiniz! Isıtma açılıyor.',
-    );
-
-    if (_thermostatProvider?.thermostat != null) {
-      _thermostatProvider!.updateTemperature(AppConstants.homeTemperature);
-      _thermostatProvider!.updateMode('on');
-    }
+  Future<void> _updateDistance() async {
+    final settings = _settingsProvider;
+    if (settings == null) return;
+    try {
+      _lastDistance = await _channel.invokeMethod<double>('getDistance', {
+        'latitude': settings.homeLatitude, 'longitude': settings.homeLongitude,
+      }) ?? 0;
+    } catch (_) {}
   }
-
-  /// Handle exiting home
-  Future<void> _handleExitHome() async {
-    debugPrint('🚶 GEOFENCE: Exited home zone!');
-    await notificationsService.showNotification(
-      id: 1,
-      title: 'Termostat',
-      body: 'Evden ayrıldınız. Eko moda geçiliyor.',
-    );
-
-    if (_thermostatProvider?.thermostat != null) {
-      _thermostatProvider!.updateTemperature(AppConstants.awayTemperature);
-      _thermostatProvider!.updateMode('off');
-    }
-  }
-
-  /// Update geofence with new settings (live)
   Future<void> updateGeofence(BuildContext context) async {
     if (!_isInitialized || !_isStarted) return;
-    if (context.mounted) {
-      _settingsProvider = Provider.of<SettingsProvider>(context, listen: false);
-    }
-
-    final lat = _settingsProvider!.homeLatitude;
-    final lng = _settingsProvider!.homeLongitude;
-    final radius = _settingsProvider!.homeRadiusMeters;
-
-    // Restart monitoring with new coordinates
-    await _channel.invokeMethod('startMonitoring', {
-      'latitude': lat,
-      'longitude': lng,
-      'radius': radius,
-    });
-    await _updateDistance();
-    debugPrint('Geofence updated: lat=$lat, lng=$lng, radius=${radius}m');
-  }
-
-  /// Stop the geofence service
-  Future<void> stop() async {
+    if (context.mounted) _settingsProvider = Provider.of<SettingsProvider>(context, listen: false);
+    if (!await _syncNativePolicy()) return;
+    final settings = _settingsProvider!;
     try {
-      await _channel.invokeMethod('stopMonitoring');
-    } catch (e) {
-      debugPrint('Error stopping native geofence: $e');
+      _isStarted = await _channel.invokeMethod<bool>('startMonitoring', {
+        'latitude': settings.homeLatitude, 'longitude': settings.homeLongitude,
+        'radius': settings.homeRadiusMeters,
+      }) ?? false;
+      await _updateDistance();
+      notifyListeners();
+    } catch (_) {}
+  }
+  Future<void> stop() async {
+    if (_supported) {
+      try {
+        await _channel.invokeMethod('configureExitActions', {
+          'enabled': false, 'ownerUid': '', 'heating': false, 'lightIds': <String>[],
+        });
+        await _channel.invokeMethod('stopMonitoring');
+      } catch (_) {}
     }
     _isStarted = false;
-    debugPrint('Geofence service stopped');
+    notifyListeners();
   }
-
-  /// Check if the service is running
   bool get isRunning => _isStarted;
-
-  /// Check if the service is initialized
   bool get isInitialized => _isInitialized;
-
-  /// Whether currently inside the geofence
   bool get isInsideGeofence => _isInsideGeofence;
-
-  /// Last measured distance from home in meters
   double get lastDistance => _lastDistance;
-
-  /// Reset the service state
+  String? get lastAutomationMessage => _lastAutomationMessage;
   void resetState() {
-    _isStarted = false;
+    unawaited(stop());
+    _authSubscription?.cancel();
+    _authSubscription = null;
     _isInitialized = false;
     _isInsideGeofence = true;
   }

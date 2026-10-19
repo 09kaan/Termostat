@@ -1,3 +1,5 @@
+import 'dart:convert';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/material.dart';
@@ -17,8 +19,48 @@ class SettingsProvider extends ChangeNotifier {
   double _homeRadiusMeters = AppConstants.defaultHomeRadiusMeters;
   bool _geofenceEnabled = true;
 
+  final Map<String, Map<String, String>> _exitLightsByOwner = {};
+  bool _exitHeating = true;
+  late final Future<void> ready;
+
   SettingsProvider() {
-    _loadSettings();
+    ready = _loadSettings();
+  }
+
+  bool get exitHeating => _exitHeating;
+  Set<String> get exitLightIds {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    return Set<String>.unmodifiable(_exitLightsByOwner[uid]?.keys ?? <String>[]);
+  }
+
+  Map<String, String> get exitLightIPs {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    return Map<String, String>.unmodifiable(_exitLightsByOwner[uid] ?? <String, String>{});
+  }
+
+  Future<void> setExitHeating(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!await prefs.setBool('geofence_exit_heating', value)) {
+      throw StateError('Ayar kaydedilemedi');
+    }
+    _exitHeating = value;
+    notifyListeners();
+  }
+
+  Future<void> setExitLightSelected(String ownerUid, String id, bool selected, {String? ip}) async {
+    if (FirebaseAuth.instance.currentUser?.uid != ownerUid ||
+        !RegExp(r'^lamp[1-8]$').hasMatch(id)) return;
+    final next = Map<String, String>.from(_exitLightsByOwner[ownerUid] ?? <String, String>{});
+    if (selected) {
+      if (ip == null || ip.isEmpty) throw StateError('Ampul IP bilgisi yok');
+      next[id] = ip;
+    } else { next.remove(id); }
+    final prefs = await SharedPreferences.getInstance();
+    if (!await prefs.setString('geofence_exit_lights_$ownerUid', jsonEncode(next))) {
+      throw StateError('Ayar kaydedilemedi');
+    }
+    _exitLightsByOwner[ownerUid] = next;
+    notifyListeners();
   }
 
   bool get isLoading => _isLoading;
@@ -47,6 +89,21 @@ class SettingsProvider extends ChangeNotifier {
       _homeLongitude = prefs.getDouble('homeLongitude') ?? AppConstants.defaultHomeLongitude;
       _homeRadiusMeters = prefs.getDouble('homeRadiusMeters') ?? AppConstants.defaultHomeRadiusMeters;
       _geofenceEnabled = prefs.getBool('geofenceEnabled') ?? true;
+      _exitHeating = prefs.getBool('geofence_exit_heating') ?? true;
+      const prefix = 'geofence_exit_lights_';
+      for (final key in prefs.getKeys().where((k) => k.startsWith(prefix))) {
+        try {
+          final raw = jsonDecode(prefs.getString(key) ?? '{}');
+          if (raw is Map) {
+            _exitLightsByOwner[key.substring(prefix.length)] = {
+              for (final entry in raw.entries)
+                if (entry.key is String && entry.value is String &&
+                    RegExp(r'^lamp[1-8]$').hasMatch(entry.key as String))
+                  entry.key as String: entry.value as String,
+            };
+          }
+        } catch (_) { /* Invalid saved selection stays unselected. */ }
+      }
     } catch (e) {
       _error = e.toString();
     } finally {

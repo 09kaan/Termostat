@@ -57,21 +57,14 @@ class _HomeFloorPlanState extends State<HomeFloorPlan> {
             child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Row(children: [
-                    Expanded(
-                        child: Text('Mimari plan',
-                            style: Theme.of(context).textTheme.headlineSmall)),
-                    IconButton(
-                        tooltip: 'Planı sıfırla',
-                        onPressed: _zoomed
-                            ? () => _transform.value = Matrix4.identity()
-                            : null,
-                        icon: const Icon(Icons.center_focus_strong))
-                  ]),
-                  const SizedBox(height: 8),
-                  const Text(
-                      'Odaya dokun: oda detayı. Ampule dokun: aç / kapat. Basılı tut: kontroller.'),
-                  const SizedBox(height: 16),
+                  Align(
+                      alignment: Alignment.centerRight,
+                      child: IconButton(
+                          tooltip: 'Planı sıfırla',
+                          onPressed: _zoomed
+                              ? () => _transform.value = Matrix4.identity()
+                              : null,
+                          icon: const Icon(Icons.center_focus_strong))),
                   ColoredBox(
                       color: palette.paper,
                       child: AspectRatio(
@@ -178,11 +171,12 @@ class _HomeFloorPlanState extends State<HomeFloorPlan> {
                             }),
                           ))),
                   const SizedBox(height: 12),
-                  Text('Yaklaşık yerleşim · Ölçekli mimari çizim değildir.',
-                      style: TextStyle(
-                          fontSize: 14,
-                          color:
-                              Theme.of(context).colorScheme.onSurfaceVariant)),
+                  if (visible
+                      .any((f) => widget.states[f.id]?.retryable == true)) ...[
+                    const Text(
+                        'Yanıt doğrulanamadı. İşaretli ampule dokun: aynı komutu tekrar dene.'),
+                    const SizedBox(height: 8),
+                  ],
                   if (visible.isEmpty) ...[
                     const SizedBox(height: 16),
                     const Text(
@@ -244,7 +238,8 @@ class CadLampButton extends StatelessWidget {
                 .copyWith(triggerMode: TooltipTriggerMode.manual),
             child: IconButton(
               key: ValueKey('plan-lamp-${fixture.id}'),
-              tooltip: '${fixture.name}: ${state.label}',
+              tooltip:
+                  '${fixture.name}: ${state.label}${state.retryable ? ' · Aynı komutu tekrar dene' : ''}',
               padding: const EdgeInsets.all(8),
               onPressed: state.controllable ? onTap : null,
               disabledColor: color,
@@ -265,14 +260,16 @@ class CadLampButton extends StatelessWidget {
                           : Icons.lightbulb_outline,
                       size: 26,
                       color: color),
-                if (state.pending || state.on == null)
+                if (state.pending || state.retryable || state.on == null)
                   Positioned(
                       right: -5,
                       top: -5,
                       child: Icon(
                           state.pending
                               ? Icons.hourglass_top
-                              : Icons.question_mark,
+                              : state.retryable
+                                  ? Icons.error_outline
+                                  : Icons.question_mark,
                           size: 12,
                           color: color)),
               ]),

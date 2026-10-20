@@ -9,6 +9,7 @@ import '../widgets/room_overview.dart';
 import '../widgets/home_floor_plan.dart';
 import '../widgets/home_pager.dart';
 import '../models/home_plan.dart';
+import '../models/wiz_command_feedback.dart';
 import '../services/home_plan_preferences.dart';
 
 /// WiZ commands go through an authenticated ESP bridge. No local-network
@@ -50,6 +51,9 @@ class WizLightsScreenState extends State<WizLightsScreen> {
   int _serverOffset = 0;
   bool _timeReady = false;
   final Set<String> _sending = {};
+  final Map<String, int> _writeStarted = {};
+  double _roomDrag = 0;
+  int _clockTick = 0;
 
   @override
   void initState() {
@@ -70,8 +74,15 @@ class WizLightsScreenState extends State<WizLightsScreen> {
         FirebaseDatabase.instance.ref('.info/connected').onValue.listen((e) {
       if (mounted) _refresh(() => _connected = e.snapshot.value == true);
     });
-    _clock = Timer.periodic(const Duration(seconds: 5), (_) {
-      if (mounted) _refresh(() {});
+    _clock = Timer.periodic(const Duration(seconds: 1), (_) {
+      _clockTick++;
+      final commands = _map(_homeData['commands']);
+      final reports = _map(_map(_homeData['status'])['lights']);
+      final waiting = _sending.isNotEmpty ||
+          commands.entries.any((e) => _commandFeedback(
+                  e.key, _map(e.value), _map(reports[e.key]), false)
+              .pending);
+      if (mounted && (waiting || _clockTick % 5 == 0)) _refresh(() {});
     });
   }
 
@@ -88,11 +99,16 @@ class WizLightsScreenState extends State<WizLightsScreen> {
       _dataReady = false;
       _dataError = false;
       _sending.clear();
+      _writeStarted.clear();
       _selectedRoom = null;
       _selectedFixture = null;
       _bindings = {};
       _planReady = user == null;
       _savingPlan = false;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && binding == _binding)
+        const RoomDetailNotification(false).dispatch(context);
     });
     if (user != null) _loadPlan(user.uid, binding);
     // Native Firebase onValue is a single-subscription stream. Subscribe ONCE
@@ -153,18 +169,26 @@ class WizLightsScreenState extends State<WizLightsScreen> {
     }
   }
 
-  void _enterRoom(String roomId) => _refresh(() {
-        _selectedRoom = roomId;
-        final fixtures = HomePlan.fixturesFor(roomId);
-        final lights = _map(_map(_homeData['config'])['lights']);
-        final assigned = fixtures.where((f) =>
-            HomePlanPreferences.resolve(f.id, _bindings, lights) != null);
-        _selectedFixture = assigned.firstOrNull?.id;
-      });
-  void _leaveRoom() => _refresh(() {
-        _selectedRoom = null;
-        _selectedFixture = null;
-      });
+  void _enterRoom(String roomId) {
+    _refresh(() {
+      _selectedRoom = roomId;
+      final lights = _map(_map(_homeData['config'])['lights']);
+      _selectedFixture = HomePlan.fixturesFor(roomId)
+          .where((f) =>
+              HomePlanPreferences.resolve(f.id, _bindings, lights) != null)
+          .firstOrNull
+          ?.id;
+    });
+    const RoomDetailNotification(true).dispatch(context);
+  }
+
+  void _leaveRoom() {
+    _refresh(() {
+      _selectedRoom = null;
+      _selectedFixture = null;
+    });
+    const RoomDetailNotification(false).dispatch(context);
+  }
 
   @override
   void dispose() {
@@ -189,7 +213,10 @@ class WizLightsScreenState extends State<WizLightsScreen> {
 
   void _message(String text) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.removeCurrentSnackBar();
+    messenger.clearSnackBars();
+    messenger.showSnackBar(SnackBar(content: Text(text)));
   }
 
   Future<void> _send(String id, Map<String, dynamic> params) async {
@@ -201,7 +228,11 @@ class WizLightsScreenState extends State<WizLightsScreen> {
       _message('Firebase bağlantısı hazır değil.');
       return;
     }
-    _refresh(() => _sending.add(id));
+    final generation = _binding;
+    _refresh(() {
+      _sending.add(id);
+      _writeStarted[id] = _now;
+    });
     try {
       final ref = home.child('commands/$id');
       final commandId = ref.push().key!;
@@ -213,12 +244,17 @@ class WizLightsScreenState extends State<WizLightsScreen> {
         'ttlMs': 60000,
         'params': params,
       });
-      _message('Komut gönderildi. Ampul yanıtı bekleniyor.');
+      // The inline state gives immediate feedback; no queued success snackbar.
     } catch (_) {
-      _message(
-          'Komut gönderilemedi. İnterneti ve Firebase izinlerini kontrol et.');
+      if (mounted && generation == _binding)
+        _message(
+            'Komut gönderilemedi. İnterneti ve Firebase izinlerini kontrol et.');
     } finally {
-      if (mounted) _refresh(() => _sending.remove(id));
+      if (mounted && generation == _binding)
+        _refresh(() {
+          _sending.remove(id);
+          _writeStarted.remove(id);
+        });
     }
   }
 
@@ -494,6 +530,38 @@ class WizLightsScreenState extends State<WizLightsScreen> {
     ]);
   }
 
+  WizCommandFeedback _commandFeedback(String id, Map<String, dynamic> command,
+          Map<String, dynamic> report, bool current) =>
+      WizCommandFeedback.evaluate(
+          command: command,
+          report: report,
+          now: _now,
+          reportIsCurrent: current,
+          writing: _sending.contains(id),
+          writeStartedAt: _writeStarted[id]);
+
+  void _retryCommand(String id) {
+    final lights = _map(_map(_homeData['config'])['lights']);
+    final status = _map(_homeData['status']);
+    final config = _map(lights[id]);
+    final report = _map(_map(status['lights'])[id]);
+    final command = _map(_map(_homeData['commands'])[id]);
+    final current = _connected &&
+        report['online'] == true &&
+        report['ip'] == config['ip'] &&
+        _fresh(report['reportedAt'], 90000);
+    final feedback = _commandFeedback(id, command, report, current);
+    if (config.isEmpty ||
+        !_connected ||
+        !_timeReady ||
+        _dataError ||
+        !_fresh(_map(status['bridge'])['lastSeen'], 90000) ||
+        !feedback.retryable ||
+        _sending.contains(id)) return;
+    // Repeat the same absolute values. NEVER invert an unconfirmed old state.
+    _send(id, feedback.params);
+  }
+
   FixtureState _fixtureState(
       String fixture,
       Map<String, dynamic> lights,
@@ -510,20 +578,22 @@ class WizLightsScreenState extends State<WizLightsScreen> {
         report['online'] == true &&
         report['ip'] == config['ip'] &&
         _fresh(report['reportedAt'], 90000);
-    final applied =
-        command['id'] != null && report['lastCommandId'] == command['id'];
-    final pending = _sending.contains(id) ||
-        (command['id'] != null &&
-            !applied &&
-            _fresh(command['issuedAt'], 60000));
+    final feedback = _commandFeedback(id, command, report, fresh);
+    final pending = feedback.pending;
     final bool? on =
         fresh && report['state'] is bool ? report['state'] as bool : null;
     return FixtureState(
         assigned: true,
         on: on,
         pending: pending,
-        controllable:
-            on != null && _connected && _timeReady && bridgeOnline && !pending);
+        retryable: feedback.retryable,
+        feedback: feedback.message,
+        controllable: (on != null || feedback.retryable) &&
+            !_dataError &&
+            _connected &&
+            _timeReady &&
+            bridgeOnline &&
+            !pending);
   }
 
   void _togglePlanFixture(String fixture) {
@@ -535,8 +605,12 @@ class WizLightsScreenState extends State<WizLightsScreen> {
     final state = _fixtureState(fixture, lights, _map(status['lights']),
         _map(_homeData['commands']), bridge);
     final id = HomePlanPreferences.resolve(fixture, _bindings, lights);
-    if (id != null && state.controllable && state.on != null) {
-      _send(id, {'state': !state.on!});
+    if (id != null && state.controllable) {
+      if (state.retryable) {
+        _retryCommand(id);
+      } else if (state.on != null) {
+        _send(id, {'state': !state.on!});
+      }
     }
   }
 
@@ -582,7 +656,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
           : HomePlanPreferences.resolve(fixture, _bindings, lights);
       final state = states[fixture] ?? const FixtureState();
       final enabled = id != null &&
-          state.on != null &&
+          state.controllable &&
           _connected &&
           _timeReady &&
           bridgeOnline &&
@@ -643,10 +717,12 @@ class WizLightsScreenState extends State<WizLightsScreen> {
                   ? true
                   : state.on,
               pending: state.pending,
+              commandFeedback: state.feedback,
+              retryCommand: state.retryable,
               lightName: id == null
                   ? null
                   : '${_map(lights[id])['name'] ?? 'Ampul'} · ${selected?.type ?? ''}',
-              onToggle: enabled ? () => _send(id, {'state': !state.on!}) : null,
+              onToggle: enabled ? () => _togglePlanFixture(fixture!) : null,
               onControls: id == null ? null : () => _openControls(id),
               onSetup: openSettings,
               temperature: hasReading && sensor.currentTemperature.isFinite
@@ -664,18 +740,35 @@ class WizLightsScreenState extends State<WizLightsScreen> {
         onPopInvokedWithResult: (didPop, result) {
           if (!didPop && active && _selectedRoom != null) _leaveRoom();
         },
-        child: AnimatedSwitcher(
-          key: const ValueKey('room-transition'),
-          duration: Duration(milliseconds: reduced ? 0 : 240),
-          reverseDuration: Duration(milliseconds: reduced ? 0 : 160),
-          // Do not keep a second interactive old room alive during the transition.
-          layoutBuilder: (current, previous) => current ?? const SizedBox(),
-          transitionBuilder: (child, animation) => FadeTransition(
-              opacity: animation,
-              child: ScaleTransition(
-                  scale: Tween<double>(begin: .97, end: 1).animate(animation),
-                  child: child)),
-          child: child,
+        child: GestureDetector(
+          key: const ValueKey('room-swipe-back'),
+          behavior: HitTestBehavior.translucent,
+          onHorizontalDragStart:
+              roomId != null && active ? (_) => _roomDrag = 0 : null,
+          onHorizontalDragUpdate:
+              roomId != null && active ? (d) => _roomDrag += d.delta.dx : null,
+          onHorizontalDragCancel:
+              roomId != null && active ? () => _roomDrag = 0 : null,
+          onHorizontalDragEnd: roomId != null && active
+              ? (d) {
+                  if (_roomDrag < -48 || (d.primaryVelocity ?? 0) < -250)
+                    _leaveRoom();
+                  _roomDrag = 0;
+                }
+              : null,
+          child: AnimatedSwitcher(
+            key: const ValueKey('room-transition'),
+            duration: Duration(milliseconds: reduced ? 0 : 240),
+            reverseDuration: Duration(milliseconds: reduced ? 0 : 160),
+            // Do not keep a second interactive old room alive during the transition.
+            layoutBuilder: (current, previous) => current ?? const SizedBox(),
+            transitionBuilder: (child, animation) => FadeTransition(
+                opacity: animation,
+                child: ScaleTransition(
+                    scale: Tween<double>(begin: .97, end: 1).animate(animation),
+                    child: child)),
+            child: child,
+          ),
         ));
   }
 
@@ -692,26 +785,18 @@ class WizLightsScreenState extends State<WizLightsScreen> {
         report['ip'] == config['ip'] &&
         _fresh(report['reportedAt'], 90000);
     final knownState = fresh && report['state'] is bool;
-    final applied =
-        command['id'] != null && report['lastCommandId'] == command['id'];
-    final pending = _sending.contains(id) ||
-        (command['id'] != null &&
-            !applied &&
-            _fresh(command['issuedAt'], 60000));
-    final text = pending
-        ? 'Ampul yanıtı bekleniyor'
-        : applied && report['commandStatus'] == 'expired'
-            ? 'Komutun süresi doldu'
-            : applied && report['commandStatus'] == 'no_response'
-                ? 'Komuta yanıt alınamadı'
-                : !fresh
-                    ? 'Güncel ampul yanıtı yok'
-                    : knownState
-                        ? (report['state'] == true
-                            ? 'Ampul bildirimi: Açık'
-                            : 'Ampul bildirimi: Kapalı')
-                        : 'Durum bilinmiyor';
-    final enabled = _connected &&
+    final feedback = _commandFeedback(id, command, report, fresh);
+    final pending = feedback.pending;
+    final text = feedback.message ??
+        (!fresh
+            ? 'Güncel ampul yanıtı yok'
+            : knownState
+                ? (report['state'] == true
+                    ? 'Ampul bildirimi: Açık'
+                    : 'Ampul bildirimi: Kapalı')
+                : 'Durum bilinmiyor');
+    final enabled = !_dataError &&
+        _connected &&
         _timeReady &&
         bridgeOnline &&
         !_sending.contains(id) &&
@@ -740,6 +825,12 @@ class WizLightsScreenState extends State<WizLightsScreen> {
                     tooltip: 'Ampulü kaldır'),
             ]),
             Text(text),
+            if (feedback.retryable && !pending)
+              TextButton.icon(
+                  key: ValueKey('retry-command-$id'),
+                  onPressed: enabled ? () => _retryCommand(id) : null,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Aynı komutu tekrar dene')),
             Text(config['ip'] as String? ?? '',
                 style: Theme.of(context).textTheme.bodySmall),
             if (report['commandStatus'] == 'rejected')
@@ -763,7 +854,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
             ]),
             const SizedBox(height: 8),
             _BrightnessControl(
-                key: ValueKey('$id:${report['reportedAt']}'),
+                key: ValueKey('brightness-$id'),
                 value: brightness,
                 enabled: enabled,
                 onCommit: (v) =>
@@ -800,10 +891,18 @@ class _BrightnessControl extends StatefulWidget {
 
 class _BrightnessControlState extends State<_BrightnessControl> {
   late double _value;
+  bool _dragging = false;
   @override
   void initState() {
     super.initState();
     _value = widget.value;
+  }
+
+  @override
+  void didUpdateWidget(covariant _BrightnessControl oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!_dragging && oldWidget.value != widget.value) _value = widget.value;
+    if (!widget.enabled) _dragging = false;
   }
 
   @override
@@ -815,8 +914,17 @@ class _BrightnessControlState extends State<_BrightnessControl> {
             min: 10,
             max: 100,
             divisions: 90,
-            onChanged:
-                widget.enabled ? (v) => setState(() => _value = v) : null,
-            onChangeEnd: widget.enabled ? widget.onCommit : null),
+            onChanged: widget.enabled
+                ? (v) => setState(() {
+                      _dragging = true;
+                      _value = v;
+                    })
+                : null,
+            onChangeEnd: widget.enabled
+                ? (v) {
+                    _dragging = false;
+                    widget.onCommit(v);
+                  }
+                : null),
       ]);
 }

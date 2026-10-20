@@ -23,6 +23,7 @@ class HomePager extends StatefulWidget {
 class _HomePagerState extends State<HomePager> {
   final PageController _controller = PageController(initialPage: 2);
   int _index = 2;
+  bool _roomOpen = false;
   static const _titles = ['Log', 'Evim', 'Termostat', 'Takvim'];
   @override
   void dispose() {
@@ -48,19 +49,28 @@ class _HomePagerState extends State<HomePager> {
       ),
       body: SafeArea(
         top: false,
-        child: PageView(
-          key: const ValueKey('main-pager'),
-          controller: _controller,
-          // Don't let ambient RTL direction silently invert physical swipes.
-          reverse: Directionality.of(context) == TextDirection.rtl,
-          onPageChanged: (index) => setState(() => _index = index),
-          children: [
-            for (var i = 0; i < widget.pages.length; i++)
-              _KeptPage(
-                  key: ValueKey('kept-page-$i'),
-                  child: MainSectionActive(
-                      active: _index == i, child: widget.pages[i])),
-          ],
+        child: NotificationListener<RoomDetailNotification>(
+          onNotification: (event) {
+            if (_roomOpen != event.open) setState(() => _roomOpen = event.open);
+            return true;
+          },
+          child: PageView(
+            key: const ValueKey('main-pager'),
+            controller: _controller,
+            physics: _index == 1 && _roomOpen
+                ? const NeverScrollableScrollPhysics()
+                : null,
+            // Don't let ambient RTL direction silently invert physical swipes.
+            reverse: Directionality.of(context) == TextDirection.rtl,
+            onPageChanged: (index) => setState(() => _index = index),
+            children: [
+              for (var i = 0; i < widget.pages.length; i++)
+                _KeptPage(
+                    key: ValueKey('kept-page-$i'),
+                    child: MainSectionActive(
+                        active: _index == i, child: widget.pages[i])),
+            ],
+          ),
         ),
       ),
     );
@@ -96,4 +106,10 @@ class MainSectionActive extends InheritedWidget {
   @override
   bool updateShouldNotify(MainSectionActive oldWidget) =>
       active != oldWidget.active;
+}
+
+/// The detail owns horizontal gestures; the main pager resumes on the plan.
+class RoomDetailNotification extends Notification {
+  const RoomDetailNotification(this.open);
+  final bool open;
 }

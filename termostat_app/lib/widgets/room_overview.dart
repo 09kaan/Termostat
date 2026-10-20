@@ -24,12 +24,15 @@ class RoomOverview extends StatelessWidget {
     this.floorLamp = false,
     this.ambientOn,
     this.planAspect,
+    this.commandFeedback,
+    this.retryCommand = false,
   });
 
   final bool? isLightOn;
   final bool? ambientOn;
   final double? planAspect;
-  final bool pending;
+  final bool pending, retryCommand;
+  final String? commandFeedback;
   final String? lightName;
   final VoidCallback? onToggle;
   final VoidCallback? onControls;
@@ -44,13 +47,14 @@ class RoomOverview extends StatelessWidget {
       ? 'Bu odaya atanmış kayıtlı lamba yok'
       : lightName == null
           ? 'Odaya bir ampul bağla'
-          : pending
-              ? 'Ampul yanıtı bekleniyor'
-              : isLightOn == null
-                  ? 'Güncel ampul durumu yok'
-                  : isLightOn!
-                      ? 'Işık açık'
-                      : 'Işık kapalı';
+          : commandFeedback ??
+              (pending
+                  ? 'Ampul yanıtı bekleniyor'
+                  : isLightOn == null
+                      ? 'Güncel ampul durumu yok'
+                      : isLightOn!
+                          ? 'Işık açık'
+                          : 'Işık kapalı');
 
   @override
   Widget build(BuildContext context) {
@@ -181,9 +185,11 @@ class RoomOverview extends StatelessWidget {
             Icon(
                 pending
                     ? Icons.hourglass_top
-                    : isLightOn == null
-                        ? Icons.cloud_off_outlined
-                        : Icons.circle_outlined,
+                    : retryCommand
+                        ? Icons.error_outline
+                        : isLightOn == null
+                            ? Icons.cloud_off_outlined
+                            : Icons.circle_outlined,
                 size: 20),
             const SizedBox(width: 8),
             Expanded(child: Text(_status, style: theme.textTheme.bodyLarge)),
@@ -194,11 +200,13 @@ class RoomOverview extends StatelessWidget {
                   ? 'Ev ayarlarından bu odaya ampul bağlayabilirsin.'
                   : pending
                       ? 'Görünüm son bildirilen durumu korur.'
-                      : onToggle != null
-                          ? 'Ampule dokun: aç / kapat. Basılı tut: kontroller.'
-                          : lightName == null
-                              ? 'Ev ayarlarından bu lamba konumuna bir ampul bağlayabilirsin.'
-                              : 'Güncel yanıt gelince oda kontrolü etkinleşir.',
+                      : retryCommand
+                          ? 'Ampule dokun: aynı komutu tekrar dene. Basılı tut: kontroller.'
+                          : onToggle != null
+                              ? 'Ampule dokun: aç / kapat. Basılı tut: kontroller.'
+                              : lightName == null
+                                  ? 'Ev ayarlarından bu lamba konumuna bir ampul bağlayabilirsin.'
+                                  : 'Güncel yanıt gelince oda kontrolü etkinleşir.',
               style: theme.textTheme.bodyMedium),
           const SizedBox(height: 16),
           OutlinedButton.icon(

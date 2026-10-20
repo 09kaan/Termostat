@@ -184,17 +184,22 @@ class FixtureState {
       {this.on,
       this.pending = false,
       this.assigned = false,
-      this.controllable = false});
+      this.controllable = false,
+      this.retryable = false,
+      this.feedback});
   final bool? on;
   final bool pending, assigned;
-  final bool controllable;
+  final bool controllable, retryable;
+  final String? feedback;
   String get label => !assigned
       ? 'Eşleştirilmedi'
-      : pending
-          ? 'Yanıt bekleniyor'
-          : on == true
-              ? 'Açık'
-              : on == false
-                  ? 'Kapalı'
-                  : 'Güncel yanıt yok';
+      : feedback != null
+          ? feedback!
+          : pending
+              ? 'Yanıt bekleniyor'
+              : on == true
+                  ? 'Açık'
+                  : on == false
+                      ? 'Kapalı'
+                      : 'Güncel yanıt yok';
 }

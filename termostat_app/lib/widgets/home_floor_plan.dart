@@ -1,18 +1,21 @@
 import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
+
 import '../models/home_plan.dart';
 import '../theme/app_theme.dart';
 import 'room_overview.dart' show FloorLampIcon;
 
 /// Editable CAD geometry; no raster floorplan or pretend device values.
 class HomeFloorPlan extends StatefulWidget {
-  const HomeFloorPlan(
-      {super.key,
-      required this.states,
-      required this.onRoom,
-      required this.onLampTap,
-      required this.onLampControls,
-      required this.onSetup});
+  const HomeFloorPlan({
+    super.key,
+    required this.states,
+    required this.onRoom,
+    required this.onLampTap,
+    required this.onLampControls,
+    required this.onSetup,
+  });
   final Map<String, FixtureState> states;
   final ValueChanged<String> onRoom, onLampTap, onLampControls;
   final VoidCallback onSetup;
@@ -43,31 +46,35 @@ class _HomeFloorPlanState extends State<HomeFloorPlan> {
 
   @override
   Widget build(BuildContext context) {
-    final palette = _CadPalette(Theme.of(context).brightness == Brightness.dark,
-        AppAppearance.isWarm(context));
+    final palette = _CadPalette(
+      Theme.of(context).brightness == Brightness.dark,
+      AppAppearance.isWarm(context),
+    );
     final visible = HomePlan.fixtures
         .where((f) => widget.states[f.id]?.assigned == true)
         .toList();
     final large = MediaQuery.textScalerOf(context).scale(16) > 20;
     final drawingTextScale = TextScaler.linear(
-        (MediaQuery.textScalerOf(context).scale(14) / 14).clamp(1.0, 1.15));
-    return SingleChildScrollView(
-        child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-            child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Align(
-                      alignment: Alignment.centerRight,
-                      child: IconButton(
-                          tooltip: 'Planı sıfırla',
-                          onPressed: _zoomed
-                              ? () => _transform.value = Matrix4.identity()
-                              : null,
-                          icon: const Icon(Icons.center_focus_strong))),
-                  ColoredBox(
-                      color: palette.paper,
-                      child: AspectRatio(
+      (MediaQuery.textScalerOf(context).scale(14) / 14).clamp(1.0, 1.15),
+    );
+    final failed =
+        visible.where((f) => widget.states[f.id]?.retryable == true).toList();
+    Widget plan() => LayoutBuilder(
+          builder: (context, box) {
+            final width = math.min(
+              box.maxWidth,
+              box.maxHeight * HomePlan.size.aspectRatio,
+            );
+            return Center(
+              child: SizedBox(
+                width: width,
+                height: width / HomePlan.size.aspectRatio,
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: ColoredBox(
+                        color: palette.paper,
+                        child: AspectRatio(
                           aspectRatio: HomePlan.size.aspectRatio,
                           child: InteractiveViewer(
                             key: const ValueKey('plan-zoom'),
@@ -75,51 +82,58 @@ class _HomeFloorPlanState extends State<HomeFloorPlan> {
                             minScale: 1,
                             maxScale: 2.5,
                             panEnabled: _zoomed,
-                            child: LayoutBuilder(builder: (context, box) {
-                              final sx = box.maxWidth / HomePlan.size.width,
-                                  sy = box.maxHeight / HomePlan.size.height;
-                              return Stack(children: [
-                                Positioned.fill(
-                                    child: CustomPaint(
+                            child: LayoutBuilder(
+                              builder: (context, box) {
+                                final sx = box.maxWidth / HomePlan.size.width,
+                                    sy = box.maxHeight / HomePlan.size.height;
+                                return Stack(
+                                  children: [
+                                    Positioned.fill(
+                                      child: CustomPaint(
                                         painter: _CadPlanPainter(
-                                            palette, widget.states))),
-                                for (final r in HomePlan.rooms)
-                                  Positioned(
-                                      left: r.bounds.left * sx,
-                                      top: r.bounds.top * sy,
-                                      width: r.bounds.width * sx,
-                                      height: r.bounds.height * sy,
-                                      child: Semantics(
+                                          palette,
+                                          widget.states,
+                                        ),
+                                      ),
+                                    ),
+                                    for (final r in HomePlan.rooms)
+                                      Positioned(
+                                        left: r.bounds.left * sx,
+                                        top: r.bounds.top * sy,
+                                        width: r.bounds.width * sx,
+                                        height: r.bounds.height * sy,
+                                        child: Semantics(
                                           button: true,
                                           label: '${r.name}, ${r.dimensions}',
                                           child: Material(
-                                              color: Colors.transparent,
-                                              child: InkWell(
-                                                key: ValueKey(
-                                                    'plan-room-${r.id}'),
-                                                onTap: () =>
-                                                    widget.onRoom(r.id),
-                                                child: Center(
-                                                    child: Transform.translate(
+                                            color: Colors.transparent,
+                                            child: InkWell(
+                                              key:
+                                                  ValueKey('plan-room-${r.id}'),
+                                              onTap: () => widget.onRoom(r.id),
+                                              child: Center(
+                                                child: Transform.translate(
                                                   offset: HomePlan.fixturesFor(
                                                               r.id)
-                                                          .any((f) =>
-                                                              widget
-                                                                  .states[f.id]
-                                                                  ?.assigned ==
-                                                              true)
+                                                          .any(
+                                                    (f) =>
+                                                        widget.states[f.id]
+                                                            ?.assigned ==
+                                                        true,
+                                                  )
                                                       ? Offset(
                                                           r.labelOffset.dx * sx,
-                                                          r.labelOffset.dy * sy)
+                                                          r.labelOffset.dy * sy,
+                                                        )
                                                       : Offset.zero,
                                                   child:
                                                       // Very small Hol retains its accessible name in the room links.
-                                                      r.id ==
-                                                                  'small_hall' &&
-                                                              visible.any((f) =>
-                                                                  f
-                                                                      .roomId ==
-                                                                  r.id)
+                                                      r.id == 'small_hall' &&
+                                                              visible.any(
+                                                                (f) =>
+                                                                    f.roomId ==
+                                                                    r.id,
+                                                              )
                                                           ? const SizedBox()
                                                           : RotatedBox(
                                                               quarterTurns:
@@ -128,88 +142,217 @@ class _HomeFloorPlanState extends State<HomeFloorPlan> {
                                                                       ? 1
                                                                       : 0,
                                                               child: Text(
-                                                                  r.label,
-                                                                  textScaler:
-                                                                      drawingTextScale,
-                                                                  textAlign:
-                                                                      TextAlign
-                                                                          .center,
-                                                                  style: TextStyle(
-                                                                      fontSize:
-                                                                          14,
-                                                                      fontWeight:
-                                                                          FontWeight
-                                                                              .w500,
-                                                                      color: palette
-                                                                          .text))),
-                                                )),
-                                              )))),
-                                // Native 44px buttons, independent of room taps and zoom level.
-                                for (final f in visible)
-                                  Positioned(
-                                      left: f.position.dx * sx - 22,
-                                      top: f.position.dy * sy - 22,
-                                      width: 44,
-                                      height: 44,
-                                      child: CadLampButton(
+                                                                r.label,
+                                                                textScaler:
+                                                                    drawingTextScale,
+                                                                textAlign:
+                                                                    TextAlign
+                                                                        .center,
+                                                                style:
+                                                                    TextStyle(
+                                                                  fontSize: 14,
+                                                                  fontWeight:
+                                                                      FontWeight
+                                                                          .w500,
+                                                                  color: palette
+                                                                      .text,
+                                                                ),
+                                                              ),
+                                                            ),
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    // Native 44px buttons, independent of room taps and zoom level.
+                                    for (final f in visible)
+                                      Positioned(
+                                        left: f.position.dx * sx - 22,
+                                        top: f.position.dy * sy - 22,
+                                        width: 44,
+                                        height: 44,
+                                        child: CadLampButton(
                                           fixture: f,
                                           state: widget.states[f.id]!,
                                           onTap: () => widget.onLampTap(f.id),
                                           onControls: () =>
-                                              widget.onLampControls(f.id))),
-                                Positioned(
-                                    left: 304 * sx,
-                                    top: 708 * sy,
-                                    width: 76 * sx,
-                                    child: Text('Giriş',
+                                              widget.onLampControls(f.id),
+                                        ),
+                                      ),
+                                    Positioned(
+                                      left: 304 * sx,
+                                      top: 708 * sy,
+                                      width: 76 * sx,
+                                      child: Text(
+                                        'Giriş',
                                         textScaler: drawingTextScale,
                                         textAlign: TextAlign.center,
                                         style: TextStyle(
-                                            fontSize: 14,
-                                            color: palette.text))),
-                              ]);
-                            }),
-                          ))),
-                  const SizedBox(height: 12),
-                  if (visible
-                      .any((f) => widget.states[f.id]?.retryable == true)) ...[
-                    const Text(
-                        'Yanıt doğrulanamadı. İşaretli ampule dokun: aynı komutu tekrar dene.'),
-                    const SizedBox(height: 8),
+                                          fontSize: 14,
+                                          color: palette.text,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                );
+                              },
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      top: 4,
+                      right: 4,
+                      child: Material(
+                        color: Theme.of(context).colorScheme.surface,
+                        borderRadius: BorderRadius.circular(12),
+                        child: IconButton(
+                          key: const ValueKey('reset-plan'),
+                          tooltip: 'Planı ekrana sığdır',
+                          onPressed: () =>
+                              _transform.value = Matrix4.identity(),
+                          icon: const Icon(Icons.center_focus_strong),
+                        ),
+                      ),
+                    ),
                   ],
-                  if (visible.isEmpty) ...[
-                    const SizedBox(height: 16),
-                    const Text(
-                        'Henüz odaya bağlı kayıtlı lamba yok. Eşleştirmeden sonra lambalar planda görünür.'),
-                    const SizedBox(height: 8),
-                    Align(
-                        alignment: Alignment.centerLeft,
-                        child: OutlinedButton.icon(
-                            onPressed: widget.onSetup,
-                            icon: const Icon(Icons.add),
-                            label: const Text('Lambaları bağla'))),
-                  ],
-                  const SizedBox(height: 16),
-                  Wrap(spacing: 8, runSpacing: 8, children: [
-                    for (final r in HomePlan.rooms)
-                      ActionChip(
-                          key: ValueKey('room-link-${r.id}'),
-                          avatar:
-                              const Icon(Icons.meeting_room_outlined, size: 18),
-                          label: Text(r.name),
-                          onPressed: () => widget.onRoom(r.id))
-                  ]),
-                ])));
+                ),
+              ),
+            );
+          },
+        );
+    Widget? notice;
+    if (failed.isNotEmpty) {
+      final dark = Theme.of(context).brightness == Brightness.dark;
+      final noticeSurface =
+          dark ? const Color(0xFF493514) : const Color(0xFFFFF0D6);
+      final noticeText =
+          dark ? const Color(0xFFFFDD9A) : const Color(0xFF5A3B00);
+      notice = Semantics(
+        liveRegion: true,
+        child: Card(
+          key: const ValueKey('plan-retry-notice'),
+          color: noticeSurface,
+          elevation: 0,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.warning_amber_rounded,
+                  color: noticeText,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '${failed.length} lamba yanıt vermiyor.',
+                    style: TextStyle(color: noticeText),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () {
+                    if (failed.length == 1) {
+                      if (widget.states[failed.single.id]?.controllable ==
+                          true) {
+                        widget.onLampTap(failed.single.id);
+                      } else {
+                        widget.onLampControls(failed.single.id);
+                      }
+                    } else {
+                      // No bulk command: the user chooses exactly one fixture.
+                      showModalBottomSheet<void>(
+                        context: context,
+                        showDragHandle: true,
+                        builder: (sheet) => SafeArea(
+                          child: ListView(
+                            shrinkWrap: true,
+                            children: [
+                              const ListTile(
+                                title: Text('Tekrar denenecek lambayı seç'),
+                              ),
+                              for (final f in failed)
+                                ListTile(
+                                  title: Text(
+                                    '${HomePlan.room(f.roomId).name} · ${f.type}',
+                                  ),
+                                  trailing: const Icon(Icons.chevron_right),
+                                  onTap: () {
+                                    Navigator.pop(sheet);
+                                    if (widget.states[f.id]?.controllable ==
+                                        true) {
+                                      widget.onLampTap(f.id);
+                                    } else {
+                                      widget.onLampControls(f.id);
+                                    }
+                                  },
+                                ),
+                            ],
+                          ),
+                        ),
+                      );
+                    }
+                  },
+                  child: const Text('Tekrar dene'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    } else if (visible.isEmpty) {
+      notice = Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: OutlinedButton.icon(
+          onPressed: widget.onSetup,
+          icon: const Icon(Icons.add),
+          label: const Text('Lambaları bağla'),
+        ),
+      );
+    }
+    return LayoutBuilder(
+      builder: (context, box) {
+        final accessible = box.maxHeight < 360 ||
+            MediaQuery.textScalerOf(context).scale(1) > 1.3;
+        if (accessible) {
+          return SingleChildScrollView(
+            key: const ValueKey('plan-accessible-scroll'),
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              children: [
+                SizedBox(
+                  height: math.max(320, box.maxHeight - 100),
+                  child: plan(),
+                ),
+                if (notice != null) notice,
+              ],
+            ),
+          );
+        }
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(child: plan()),
+              if (notice != null) ...[const SizedBox(height: 8), notice],
+            ],
+          ),
+        );
+      },
+    );
   }
 }
 
 class CadLampButton extends StatelessWidget {
-  const CadLampButton(
-      {super.key,
-      required this.fixture,
-      required this.state,
-      required this.onTap,
-      required this.onControls});
+  const CadLampButton({
+    super.key,
+    required this.fixture,
+    required this.state,
+    required this.onTap,
+    required this.onControls,
+  });
   final PlanFixture fixture;
   final FixtureState state;
   final VoidCallback onTap, onControls;
@@ -220,62 +363,72 @@ class CadLampButton extends StatelessWidget {
         ? (dark ? const Color(0xFFFFD375) : const Color(0xFF976300))
         : (dark ? const Color(0xFFCCC3B4) : const Color(0xFF6B6256));
     return GestureDetector(
-        key: ValueKey('plan-lamp-gesture-${fixture.id}'),
-        onLongPress: onControls,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              boxShadow: state.on == true
-                  ? [
-                      BoxShadow(
-                          color: const Color(0x55FFD36B),
-                          blurRadius: 16,
-                          spreadRadius: 0)
-                    ]
-                  : const []),
-          child: TooltipTheme(
-            data: TooltipTheme.of(context)
-                .copyWith(triggerMode: TooltipTriggerMode.manual),
-            child: IconButton(
-              key: ValueKey('plan-lamp-${fixture.id}'),
-              tooltip:
-                  '${fixture.name}: ${state.label}${state.retryable ? ' · Aynı komutu tekrar dene' : ''}',
-              padding: const EdgeInsets.all(8),
-              onPressed: state.controllable ? onTap : null,
-              disabledColor: color,
-              color: color,
-              icon: Stack(clipBehavior: Clip.none, children: [
+      key: ValueKey('plan-lamp-gesture-${fixture.id}'),
+      onLongPress: onControls,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          boxShadow: state.on == true
+              ? [
+                  BoxShadow(
+                    color: const Color(0x55FFD36B),
+                    blurRadius: 16,
+                    spreadRadius: 0,
+                  ),
+                ]
+              : const [],
+        ),
+        child: TooltipTheme(
+          data: TooltipTheme.of(context)
+              .copyWith(triggerMode: TooltipTriggerMode.manual),
+          child: IconButton(
+            key: ValueKey('plan-lamp-${fixture.id}'),
+            tooltip:
+                '${fixture.name}: ${state.label}${state.retryable ? ' · Aynı komutu tekrar dene' : ''}',
+            padding: const EdgeInsets.all(8),
+            onPressed: state.controllable ? onTap : null,
+            disabledColor: color,
+            color: color,
+            icon: Stack(
+              clipBehavior: Clip.none,
+              children: [
                 if (fixture.floor)
                   FloorLampIcon(
-                      size: 26,
-                      color: state.on == true
-                          ? (dark
-                              ? const Color(0xFFFFBC7F)
-                              : const Color(0xFFA44F13))
-                          : color)
+                    size: 26,
+                    color: state.on == true
+                        ? (dark
+                            ? const Color(0xFFFFBC7F)
+                            : const Color(0xFFA44F13))
+                        : color,
+                  )
                 else
                   Icon(
-                      state.on == true
-                          ? Icons.lightbulb
-                          : Icons.lightbulb_outline,
-                      size: 26,
-                      color: color),
+                    state.on == true
+                        ? Icons.lightbulb
+                        : Icons.lightbulb_outline,
+                    size: 26,
+                    color: color,
+                  ),
                 if (state.pending || state.retryable || state.on == null)
                   Positioned(
-                      right: -5,
-                      top: -5,
-                      child: Icon(
-                          state.pending
-                              ? Icons.hourglass_top
-                              : state.retryable
-                                  ? Icons.error_outline
-                                  : Icons.question_mark,
-                          size: 12,
-                          color: color)),
-              ]),
+                    right: -5,
+                    top: -5,
+                    child: Icon(
+                      state.pending
+                          ? Icons.hourglass_top
+                          : state.retryable
+                              ? Icons.error_outline
+                              : Icons.question_mark,
+                      size: 12,
+                      color: color,
+                    ),
+                  ),
+              ],
             ),
           ),
-        ));
+        ),
+      ),
+    );
   }
 }
 
@@ -306,7 +459,9 @@ class _CadPlanPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     canvas.save();
     canvas.scale(
-        size.width / HomePlan.size.width, size.height / HomePlan.size.height);
+      size.width / HomePlan.size.width,
+      size.height / HomePlan.size.height,
+    );
     for (final room in HomePlan.rooms) {
       final lit =
           HomePlan.fixturesFor(room.id).any((f) => states[f.id]?.on == true);
@@ -319,7 +474,7 @@ class _CadPlanPainter extends CustomPainter {
     for (final (width, color) in [
       (8.0, palette.ink),
       (5.5, palette.core),
-      (1.0, palette.ink)
+      (1.0, palette.ink),
     ]) {
       final pen = Paint()
         ..color = color
@@ -335,11 +490,12 @@ class _CadPlanPainter extends CustomPainter {
       if (opening.window) {
         final side = horizontal ? const Offset(0, 2.5) : const Offset(2.5, 0);
         canvas.drawLine(
-            a,
-            b,
-            Paint()
-              ..color = palette.glass.withAlpha(70)
-              ..strokeWidth = 5);
+          a,
+          b,
+          Paint()
+            ..color = palette.glass.withAlpha(70)
+            ..strokeWidth = 5,
+        );
         final pen = Paint()
           ..color = palette.glass
           ..strokeWidth = 1;
@@ -357,9 +513,17 @@ class _CadPlanPainter extends CustomPainter {
           ..strokeWidth = 1.0
           ..style = PaintingStyle.stroke;
         canvas.drawLine(
-            a, a + Offset(math.cos(end) * radius, math.sin(end) * radius), pen);
-        canvas.drawArc(Rect.fromCircle(center: a, radius: radius), angle,
-            opening.swing * math.pi / 2, false, pen);
+          a,
+          a + Offset(math.cos(end) * radius, math.sin(end) * radius),
+          pen,
+        );
+        canvas.drawArc(
+          Rect.fromCircle(center: a, radius: radius),
+          angle,
+          opening.swing * math.pi / 2,
+          false,
+          pen,
+        );
       }
     }
     canvas.restore();

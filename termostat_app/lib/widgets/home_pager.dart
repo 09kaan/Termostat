@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+
 import '../theme/app_theme.dart';
 
 /// One stable shell and one horizontal pager for every main section.
@@ -10,11 +11,13 @@ class HomePager extends StatefulWidget {
     required this.pages,
     required this.onRoomSettings,
     required this.onAppSettings,
+    this.onRooms,
   }) : assert(pages.length == 4);
 
   final List<Widget> pages;
   final VoidCallback onRoomSettings;
   final VoidCallback onAppSettings;
+  final VoidCallback? onRooms;
 
   @override
   State<HomePager> createState() => _HomePagerState();
@@ -35,6 +38,14 @@ class _HomePagerState extends State<HomePager> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
+        leading: _index == 1 && widget.onRooms != null
+            ? IconButton(
+                key: const ValueKey('open-rooms'),
+                tooltip: 'Odalar',
+                onPressed: widget.onRooms,
+                icon: const Text('🏠', style: TextStyle(fontSize: 23)),
+              )
+            : null,
         title: Text(_titles[_index]),
         centerTitle: !AppAppearance.isWarm(context),
         actions: [
@@ -42,8 +53,9 @@ class _HomePagerState extends State<HomePager> {
             key: const ValueKey('section-settings'),
             icon: const Icon(Icons.tune),
             tooltip: _index == 1 ? 'Ev ve ampul ayarları' : 'Uygulama ayarları',
-            onPressed:
-                _index == 1 ? widget.onRoomSettings : widget.onAppSettings,
+            onPressed: _index == 1
+                ? widget.onRoomSettings
+                : widget.onAppSettings,
           ),
         ],
       ),
@@ -66,9 +78,12 @@ class _HomePagerState extends State<HomePager> {
             children: [
               for (var i = 0; i < widget.pages.length; i++)
                 _KeptPage(
-                    key: ValueKey('kept-page-$i'),
-                    child: MainSectionActive(
-                        active: _index == i, child: widget.pages[i])),
+                  key: ValueKey('kept-page-$i'),
+                  child: MainSectionActive(
+                    active: _index == i,
+                    child: widget.pages[i],
+                  ),
+                ),
             ],
           ),
         ),
@@ -97,8 +112,11 @@ class _KeptPageState extends State<_KeptPage>
 
 /// Kept-alive offscreen rooms must not intercept the system back button.
 class MainSectionActive extends InheritedWidget {
-  const MainSectionActive(
-      {super.key, required this.active, required super.child});
+  const MainSectionActive({
+    super.key,
+    required this.active,
+    required super.child,
+  });
   final bool active;
   static bool of(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<MainSectionActive>()?.active ??

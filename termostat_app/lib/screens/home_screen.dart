@@ -1,13 +1,14 @@
 import 'dart:convert';
+
 import 'package:flutter/material.dart';
-import '../theme/app_theme.dart';
 import 'package:provider/provider.dart';
+
 import '../providers/thermostat_provider.dart';
 import '../providers/settings_provider.dart';
 import '../providers/schedule_provider.dart';
 import '../models/schedule.dart';
-import '../widgets/mode_selector.dart';
-import '../widgets/weather_card.dart';
+import '../widgets/compact_dashboard.dart';
+import '../widgets/compact_weather_card.dart';
 import '../widgets/thermostat_summary.dart';
 import '../widgets/home_pager.dart';
 import './schedule_list_screen.dart';
@@ -68,13 +69,13 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   String _geofenceConfiguration(SettingsProvider settings) => jsonEncode([
-        settings.geofenceEnabled,
-        settings.homeLatitude,
-        settings.homeLongitude,
-        settings.homeRadiusMeters,
-        settings.exitHeating,
-        settings.exitLightIPs,
-      ]);
+    settings.geofenceEnabled,
+    settings.homeLatitude,
+    settings.homeLongitude,
+    settings.homeRadiusMeters,
+    settings.exitHeating,
+    settings.exitLightIPs,
+  ]);
 
   void _onSettingsChanged() {
     if (!mounted) return;
@@ -95,8 +96,10 @@ class _HomeScreenState extends State<HomeScreen> {
   void dispose() {
     Provider.of<ThermostatProvider>(context, listen: false).stopListening();
     Provider.of<ScheduleProvider>(context, listen: false).stopScheduleChecker();
-    Provider.of<SettingsProvider>(context, listen: false)
-        .removeListener(_onSettingsChanged);
+    Provider.of<SettingsProvider>(
+      context,
+      listen: false,
+    ).removeListener(_onSettingsChanged);
     _geofenceService.stop();
     _deepLinkService.dispose();
     super.dispose();
@@ -104,135 +107,41 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final warm = AppAppearance.isWarm(context);
     return HomePager(
+      onRooms: () => _roomKey.currentState?.openRooms(),
       onRoomSettings: () => _roomKey.currentState?.openSettings(),
       onAppSettings: () => Navigator.pushNamed(context, '/settings'),
       pages: [
         const ThermostatLogScreen(),
         WizLightsScreen(key: _roomKey, embedded: true),
-        SingleChildScrollView(
-          child: Padding(
-            padding: warm
-                ? const EdgeInsets.fromLTRB(20, 12, 20, 24)
-                : const EdgeInsets.fromLTRB(16, 0, 16, 0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Consumer2<ThermostatProvider, SettingsProvider>(
-                  builder: (context, thermostat, settings, _) {
-                    if (thermostat.isLoading || settings.isLoading) {
-                      return const Center(child: CircularProgressIndicator());
-                    }
-
-                    if (thermostat.error != null) {
-                      return Center(child: Text('Error: ${thermostat.error}'));
-                    }
-
-                    if (settings.error != null) {
-                      return Center(child: Text('Error: ${settings.error}'));
-                    }
-
-                    if (thermostat.thermostat == null) {
-                      return const Center(
-                          child: Text('No thermostat connected'));
-                    }
-
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        ThermostatSummary(
-                          temperature:
-                              thermostat.thermostat!.currentTemperature,
-                          humidity: thermostat.thermostat!.humidity,
-                          target: thermostat.thermostat!.targetTemperature,
-                          onTargetChanged: thermostat.updateTemperature,
-                        ),
-                        SizedBox(height: warm ? 16 : 8),
-                        if (warm)
-                          WarmModeSelector(
-                            mode: thermostat.thermostat!.mode,
-                            onModeChanged: thermostat.updateMode,
-                          )
-                        else
-                          ModeSelector(
-                            mode: thermostat.thermostat!.mode,
-                            onModeChanged: thermostat.updateMode,
-                          ),
-                        SizedBox(height: warm ? 16 : 8),
-                        Card(
-                          elevation: warm ? 0 : 2,
-                          child: Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Row(
-                              children: [
-                                Container(
-                                  width: 44,
-                                  height: 44,
-                                  decoration: BoxDecoration(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .primaryContainer,
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: Icon(
-                                    Icons.computer,
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .onPrimaryContainer,
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                const Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        'Bilgisayar',
-                                        style: TextStyle(
-                                          fontSize: 17,
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                      SizedBox(height: 2),
-                                      Text(
-                                        'Wake-on-LAN ile uzaktan aç',
-                                        style: TextStyle(fontSize: 13),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                FilledButton.icon(
-                                  onPressed: thermostat.wakeRequestInProgress
-                                      ? null
-                                      : () => _requestPcWake(thermostat),
-                                  icon: thermostat.wakeRequestInProgress
-                                      ? const SizedBox(
-                                          width: 18,
-                                          height: 18,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
-                                          ),
-                                        )
-                                      : const Icon(Icons.power_settings_new),
-                                  label: const Text("PC'yi Aç"),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        SizedBox(height: warm ? 16 : 8),
-                        const WeatherCard(),
-                        SizedBox(height: warm ? 16 : 8),
-                      ],
-                    );
-                  },
-                ),
-              ],
-            ),
-          ),
+        Consumer2<ThermostatProvider, SettingsProvider>(
+          builder: (context, thermostat, settings, _) {
+            if (thermostat.isLoading || settings.isLoading) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            if (thermostat.error != null || settings.error != null) {
+              return Center(
+                child: Text('Hata: ${thermostat.error ?? settings.error}'),
+              );
+            }
+            final data = thermostat.thermostat;
+            if (data == null) {
+              return const Center(child: Text('Bağlı termostat yok'));
+            }
+            return CompactDashboard(
+              summary: ThermostatSummary(
+                temperature: data.currentTemperature,
+                humidity: data.humidity,
+                target: data.targetTemperature,
+                onTargetChanged: thermostat.updateTemperature,
+              ),
+              mode: data.mode,
+              onModeChanged: thermostat.updateMode,
+              waking: thermostat.wakeRequestInProgress,
+              onWake: () => _requestPcWake(thermostat),
+              weather: const CompactWeatherCard(),
+            );
+          },
         ),
         const ScheduleListScreen(embedded: true),
       ],
@@ -279,7 +188,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _showAddEntryDialog(
-      BuildContext context, Schedule schedule) async {
+    BuildContext context,
+    Schedule schedule,
+  ) async {
     final formKey = GlobalKey<FormState>();
     int selectedDay = 1;
     TimeOfDay startTime = TimeOfDay.now();
@@ -300,9 +211,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 children: [
                   DropdownButtonFormField<int>(
                     value: selectedDay,
-                    decoration: const InputDecoration(
-                      labelText: 'Day of Week',
-                    ),
+                    decoration: const InputDecoration(labelText: 'Day of Week'),
                     items: List.generate(7, (index) {
                       return DropdownMenuItem(
                         value: index + 1,
@@ -367,9 +276,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   const SizedBox(height: 16),
                   DropdownButtonFormField<String>(
                     value: selectedMode,
-                    decoration: const InputDecoration(
-                      labelText: 'Mode',
-                    ),
+                    decoration: const InputDecoration(labelText: 'Mode'),
                     items: const [
                       DropdownMenuItem(value: 'heat', child: Text('Heat')),
                       DropdownMenuItem(value: 'cool', child: Text('Cool')),
@@ -405,8 +312,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   );
 
                   // Call the provider to add the entry
-                  Provider.of<ScheduleProvider>(context, listen: false)
-                      .addEntryToSchedule(schedule.id, entry);
+                  Provider.of<ScheduleProvider>(
+                    context,
+                    listen: false,
+                  ).addEntryToSchedule(schedule.id, entry);
 
                   Navigator.pop(context); // Close the dialog
                 }

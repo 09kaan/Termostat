@@ -498,7 +498,14 @@ public enum ThermostatCommandService {
         request.httpMethod = "PATCH"
         request.timeoutInterval = 15.0
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: command.payload)
+        var payload = command.payload
+        for key in ["mode", "targetTemperature"] {
+            if let value = payload[key] { payload["control/\(key)"] = value }
+        }
+        payload["control/id"] = UUID().uuidString
+        payload["control/requestedAt"] = [".sv": "timestamp"]
+        payload["control/source"] = "ios_explicit"
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
         return request
     }
 

@@ -18,13 +18,18 @@ class Thermostat {
   });
 
   factory Thermostat.fromJson(Map<String, dynamic> json) {
+    final control = json['control'] is Map ? json['control'] as Map : const {};
     return Thermostat(
       id: json['id'] as String? ?? '',
-      currentTemperature: (json['currentTemperature'] as num?)?.toDouble() ?? 0.0,
-      targetTemperature: (json['targetTemperature'] as num?)?.toDouble() ?? 0.0,
-      mode: json['mode'] as String? ?? 'off',
+      currentTemperature:
+          (json['currentTemperature'] as num?)?.toDouble() ?? 0.0,
+      targetTemperature:
+          ((control['targetTemperature'] ?? json['targetTemperature']) as num?)
+                  ?.toDouble() ??
+              0.0,
+      mode: (control['mode'] ?? json['mode']) as String? ?? 'off',
       isConnected: json['isConnected'] as bool? ?? false,
-      lastUpdated: json['lastUpdated'] != null 
+      lastUpdated: json['lastUpdated'] != null
           ? DateTime.tryParse(json['lastUpdated'] as String) ?? DateTime.now()
           : DateTime.now(),
       humidity: (json['currentHumidity'] as num?)?.toDouble() ?? 0.0,
@@ -62,4 +67,4 @@ class Thermostat {
       humidity: humidity ?? this.humidity,
     );
   }
-} 
+}

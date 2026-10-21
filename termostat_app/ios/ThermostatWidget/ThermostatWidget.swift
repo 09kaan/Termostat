@@ -74,8 +74,9 @@ struct ThermostatWidgetEntryView: View {
     private var status: String {
         if snapshot?.hasPendingCommand == true { return "Komut gönderildi" }
         if snapshot?.isStale != false { return "Eski veri" }
+        if snapshot?.mode == "manual" { return "Manuel" }
         if snapshot?.mode == "off" { return "Kapalı" }
-        if snapshot?.isHeating == true { return "Isıtıyor" }
+        if snapshot?.isHeating == true { return "Röle açık" }
         if snapshot?.mode == "on" { return "Isıtma açık" }
         return "Durum bilinmiyor"
     }
@@ -235,8 +236,9 @@ struct ThermostatLockScreenView: View {
         if entry.notice != nil { return "Güncellenemedi" }
         if snapshot?.hasPendingCommand == true { return "Komut gönderildi" }
         if snapshot?.isStale != false { return "Eski veri" }
+        if snapshot?.mode == "manual" { return "Manuel" }
         if snapshot?.mode == "off" { return "Kapalı" }
-        if snapshot?.isHeating == true { return "Isıtıyor" }
+        if snapshot?.isHeating == true { return "Röle açık" }
         if snapshot?.mode == "on" { return "Isıtma açık" }
         return "Durum bilinmiyor"
     }

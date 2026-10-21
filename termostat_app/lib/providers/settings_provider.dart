@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import '../constants/app_constants.dart';
 
 class SettingsProvider extends ChangeNotifier {
+  final String? Function() _ownerUid;
+  static String? _currentOwnerUid() => FirebaseAuth.instance.currentUser?.uid;
   bool _isLoading = false;
   String? _error;
 
@@ -23,21 +25,88 @@ class SettingsProvider extends ChangeNotifier {
 
   final Map<String, Map<String, String>> _exitLightsByOwner = {};
   bool _exitHeating = true;
+  bool _entryHeating = true;
+  double _heatEntryRadius = 200,
+      _heatExitRadius = 200,
+      _lightEntryRadius = 200,
+      _lightExitRadius = 200;
+  final Map<String, Map<String, String>> _entryLightsByOwner = {};
+  bool get entryHeating => _entryHeating;
+  double get heatEntryRadius => _heatEntryRadius;
+  double get heatExitRadius => _heatExitRadius;
+  double get lightEntryRadius => _lightEntryRadius;
+  double get lightExitRadius => _lightExitRadius;
+  Map<String, String> get entryLightIPs => Map<String, String>.unmodifiable(
+      _entryLightsByOwner[_ownerUid()] ?? <String, String>{});
+  Set<String> get entryLightIds => entryLightIPs.keys.toSet();
+  Future<void> setEntryHeating(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!await prefs.setBool('geo_v10_entry_heating', value))
+      throw StateError('Kaydedilemedi');
+    _entryHeating = value;
+    notifyListeners();
+  }
+
+  Future<void> setEntryLightSelected(String ownerUid, String id, bool selected,
+      {String? ip}) async {
+    if (_ownerUid() != ownerUid || !RegExp(r'^lamp[1-8]$').hasMatch(id)) return;
+    final next = Map<String, String>.from(_entryLightsByOwner[ownerUid] ?? {});
+    if (selected) {
+      if (ip == null || ip.isEmpty) throw StateError('IP yok');
+      next[id] = ip;
+    } else {
+      next.remove(id);
+    }
+    final prefs = await SharedPreferences.getInstance();
+    if (!await prefs.setString(
+        'geo_v10_entry_lights_$ownerUid', jsonEncode(next)))
+      throw StateError('Kaydedilemedi');
+    _entryLightsByOwner[ownerUid] = next;
+    notifyListeners();
+  }
+
+  Future<void> setAutomationRadius(String key, double value) async {
+    if (!value.isFinite || value < 50 || value > 2000)
+      throw ArgumentError.value(value);
+    final current = <String, double>{
+      'heatEntry': _heatEntryRadius,
+      'heatExit': _heatExitRadius,
+      'lightEntry': _lightEntryRadius,
+      'lightExit': _lightExitRadius
+    };
+    if (!current.containsKey(key)) throw ArgumentError.value(key);
+    current[key] = value;
+    if (current['heatExit']! < current['heatEntry']! ||
+        current['lightExit']! < current['lightEntry']!) {
+      throw StateError(
+          'Çıkış mesafesi giriş mesafesinden küçük olamaz. Önce çıkış mesafesini artır.');
+    }
+    final prefs = await SharedPreferences.getInstance();
+    if (!await prefs.setDouble('geo_v10_$key', value))
+      throw StateError('Kaydedilemedi');
+    _heatEntryRadius = current['heatEntry']!;
+    _heatExitRadius = current['heatExit']!;
+    _lightEntryRadius = current['lightEntry']!;
+    _lightExitRadius = current['lightExit']!;
+    notifyListeners();
+  }
+
   late final Future<void> ready;
 
-  SettingsProvider() {
+  SettingsProvider({String? Function()? ownerUid})
+      : _ownerUid = ownerUid ?? _currentOwnerUid {
     ready = _loadSettings();
   }
 
   bool get exitHeating => _exitHeating;
   Set<String> get exitLightIds {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
+    final uid = _ownerUid();
     return Set<String>.unmodifiable(
         _exitLightsByOwner[uid]?.keys ?? <String>[]);
   }
 
   Map<String, String> get exitLightIPs {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
+    final uid = _ownerUid();
     return Map<String, String>.unmodifiable(
         _exitLightsByOwner[uid] ?? <String, String>{});
   }
@@ -53,8 +122,7 @@ class SettingsProvider extends ChangeNotifier {
 
   Future<void> setExitLightSelected(String ownerUid, String id, bool selected,
       {String? ip}) async {
-    if (FirebaseAuth.instance.currentUser?.uid != ownerUid ||
-        !RegExp(r'^lamp[1-8]$').hasMatch(id)) return;
+    if (_ownerUid() != ownerUid || !RegExp(r'^lamp[1-8]$').hasMatch(id)) return;
     final next = Map<String, String>.from(
         _exitLightsByOwner[ownerUid] ?? <String, String>{});
     if (selected) {
@@ -105,6 +173,35 @@ class SettingsProvider extends ChangeNotifier {
           AppConstants.defaultHomeRadiusMeters;
       _geofenceEnabled = prefs.getBool('geofenceEnabled') ?? true;
       _exitHeating = prefs.getBool('geofence_exit_heating') ?? true;
+      _entryHeating = prefs.getBool('geo_v10_entry_heating') ?? true;
+      double radius(String key) {
+        final v = prefs.getDouble('geo_v10_$key') ?? _homeRadiusMeters;
+        return v.isFinite ? v.clamp(50.0, 2000.0).toDouble() : 200.0;
+      }
+
+      _heatEntryRadius = radius('heatEntry');
+      _heatExitRadius = radius('heatExit');
+      _lightEntryRadius = radius('lightEntry');
+      _lightExitRadius = radius('lightExit');
+      if (_heatExitRadius < _heatEntryRadius)
+        _heatExitRadius = _heatEntryRadius;
+      if (_lightExitRadius < _lightEntryRadius)
+        _lightExitRadius = _lightEntryRadius;
+      const entryPrefix = 'geo_v10_entry_lights_';
+      for (final key
+          in prefs.getKeys().where((k) => k.startsWith(entryPrefix))) {
+        try {
+          final raw = jsonDecode(prefs.getString(key) ?? '{}');
+          if (raw is Map)
+            _entryLightsByOwner[key.substring(entryPrefix.length)] = {
+              for (final e in raw.entries)
+                if (e.key is String &&
+                    e.value is String &&
+                    RegExp(r'^lamp[1-8]$').hasMatch(e.key))
+                  e.key as String: e.value as String
+            };
+        } catch (_) {/* Invalid selections stay off. */}
+      }
       const prefix = 'geofence_exit_lights_';
       for (final key in prefs.getKeys().where((k) => k.startsWith(prefix))) {
         try {

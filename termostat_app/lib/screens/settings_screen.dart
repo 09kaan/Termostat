@@ -119,7 +119,7 @@ class SettingsScreen extends StatelessWidget {
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 8.0),
                 child: Text(
-                  'Geofence Settings',
+                  'Konum ayarları',
                   style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.bold,
@@ -127,7 +127,7 @@ class SettingsScreen extends StatelessWidget {
                 ),
               ),
               ListTile(
-                title: const Text('GPS Geofence'),
+                title: const Text('Konum otomasyonu'),
                 subtitle: Text(settings.geofenceEnabled
                     ? 'Aktif — konum takibi açık'
                     : 'Kapalı'),
@@ -161,43 +161,13 @@ class SettingsScreen extends StatelessWidget {
                 ),
               const GeofenceExitOptions(),
               ListTile(
-                title: const Text('Home Location'),
+                title: const Text('Ev konumu'),
                 subtitle: Text(
                   '${settings.homeLatitude.toStringAsFixed(6)}, ${settings.homeLongitude.toStringAsFixed(6)}',
                 ),
                 trailing: ElevatedButton(
                   onPressed: () => _showLocationPicker(context, settings),
-                  child: const Text('Set GPS'),
-                ),
-              ),
-              ListTile(
-                title: const Text('Home Radius'),
-                subtitle: Text('${settings.homeRadiusMeters.round()} meters'),
-                trailing: SizedBox(
-                  width: 200,
-                  child: Slider(
-                    value: settings.homeRadiusMeters,
-                    min: 50.0,
-                    max: 1000.0,
-                    divisions: 19,
-                    label: '${settings.homeRadiusMeters.round()}m',
-                    onChanged: (value) {
-                      settings.setHomeRadius(value);
-                    },
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                child: Text(
-                  'The geofence will automatically update when you change these settings.',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey[600],
-                    fontStyle: FontStyle.italic,
-                  ),
-                  textAlign: TextAlign.center,
+                  child: const Text('Konumu seç'),
                 ),
               ),
               const SizedBox(height: 32),

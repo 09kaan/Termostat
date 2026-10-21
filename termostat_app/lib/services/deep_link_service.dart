@@ -7,10 +7,10 @@ import '../constants/app_constants.dart';
 import 'notifications_service.dart';
 
 /// Handles deep links from Siri Shortcuts, NFC tags, widgets etc.
-/// 
+///
 /// Supported commands:
 /// - termostat://heating-on     → Turn on heating
-/// - termostat://heating-off    → Turn off heating  
+/// - termostat://heating-off    → Turn off heating
 /// - termostat://set-temp?value=25 → Set target temperature
 /// - termostat://eco-mode       → Set eco mode (away temp + off)
 class DeepLinkService {
@@ -30,7 +30,8 @@ class DeepLinkService {
     _appLinks = AppLinks();
 
     if (context.mounted) {
-      _thermostatProvider = Provider.of<ThermostatProvider>(context, listen: false);
+      _thermostatProvider =
+          Provider.of<ThermostatProvider>(context, listen: false);
     }
 
     // Handle link that opened the app (cold start)
@@ -62,8 +63,9 @@ class DeepLinkService {
   /// Process incoming deep link
   void _handleDeepLink(Uri uri) {
     // URI format: termostat://command or termostat://command?param=value
-    final command = uri.host.isNotEmpty ? uri.host : uri.path.replaceAll('/', '');
-    
+    final command =
+        uri.host.isNotEmpty ? uri.host : uri.path.replaceAll('/', '');
+
     debugPrint('🎯 Deep link command: $command');
 
     switch (command) {
@@ -93,12 +95,13 @@ class DeepLinkService {
   /// Turn on heating
   void _heatingOn() {
     if (_thermostatProvider?.thermostat != null) {
-      _thermostatProvider!.updateMode('on');
-      _thermostatProvider!.updateTemperature(AppConstants.homeTemperature);
+      _thermostatProvider!
+          .updateControl(mode: 'on', temperature: AppConstants.homeTemperature);
       notificationsService.showNotification(
         id: 10,
         title: 'Termostat',
-        body: 'Siri: Isıtma açıldı (${AppConstants.homeTemperature.toInt()}°C)',
+        body:
+            'Siri: Isıtma talebi gönderiliyor (${AppConstants.homeTemperature.toInt()}°C)',
       );
       debugPrint('✅ Siri: Heating ON');
     }
@@ -111,7 +114,7 @@ class DeepLinkService {
       notificationsService.showNotification(
         id: 10,
         title: 'Termostat',
-        body: 'Siri: Isıtma kapatıldı',
+        body: 'Siri: Kapatma talebi gönderiliyor',
       );
       debugPrint('✅ Siri: Heating OFF');
     }
@@ -124,12 +127,13 @@ class DeepLinkService {
         AppConstants.minTemperature,
         AppConstants.maxTemperature,
       );
-      _thermostatProvider!.updateTemperature(clampedTemp);
-      _thermostatProvider!.updateMode('on');
+      _thermostatProvider!
+          .updateControl(mode: 'on', temperature: clampedTemp.toDouble());
       notificationsService.showNotification(
         id: 10,
         title: 'Termostat',
-        body: 'Siri: Sıcaklık ${clampedTemp.toInt()}°C olarak ayarlandı',
+        body:
+            'Siri: Sıcaklık ${clampedTemp.toInt()}°C ayar talebi gönderiliyor',
       );
       debugPrint('✅ Siri: Temperature set to $clampedTemp°C');
     }
@@ -138,12 +142,13 @@ class DeepLinkService {
   /// Activate eco mode
   void _ecoMode() {
     if (_thermostatProvider?.thermostat != null) {
-      _thermostatProvider!.updateTemperature(AppConstants.awayTemperature);
-      _thermostatProvider!.updateMode('off');
+      _thermostatProvider!.updateControl(
+          mode: 'off', temperature: AppConstants.awayTemperature);
       notificationsService.showNotification(
         id: 10,
         title: 'Termostat',
-        body: 'Siri: Eko mod aktif (${AppConstants.awayTemperature.toInt()}°C)',
+        body:
+            'Siri: Eko mod talebi gönderiliyor (${AppConstants.awayTemperature.toInt()}°C)',
       );
       debugPrint('✅ Siri: Eco mode activated');
     }

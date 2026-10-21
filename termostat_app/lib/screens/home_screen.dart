@@ -69,13 +69,18 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   String _geofenceConfiguration(SettingsProvider settings) => jsonEncode([
-    settings.geofenceEnabled,
-    settings.homeLatitude,
-    settings.homeLongitude,
-    settings.homeRadiusMeters,
-    settings.exitHeating,
-    settings.exitLightIPs,
-  ]);
+        settings.geofenceEnabled,
+        settings.homeLatitude,
+        settings.homeLongitude,
+        settings.heatEntryRadius,
+        settings.heatExitRadius,
+        settings.lightEntryRadius,
+        settings.lightExitRadius,
+        settings.entryHeating,
+        settings.entryLightIPs,
+        settings.exitHeating,
+        settings.exitLightIPs,
+      ]);
 
   void _onSettingsChanged() {
     if (!mounted) return;
@@ -136,6 +141,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 onTargetChanged: thermostat.updateTemperature,
               ),
               mode: data.mode,
+              feedback: thermostat.heatingFeedback,
               onModeChanged: thermostat.updateMode,
               waking: thermostat.wakeRequestInProgress,
               onWake: () => _requestPcWake(thermostat),

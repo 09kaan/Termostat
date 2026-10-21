@@ -713,17 +713,21 @@ final class ThermostatCommandTests: XCTestCase {
         XCTAssertEqual(request.httpMethod, "PATCH")
         XCTAssertEqual(payload["mode"] as? String, "on")
         XCTAssertEqual(payload["targetTemperature"] as? Double, 22.5)
+        XCTAssertEqual(payload["control/mode"] as? String, "on")
+        XCTAssertEqual(payload["control/targetTemperature"] as? Double, 22.5)
+        XCTAssertFalse((payload["control/id"] as? String ?? "").isEmpty)
+        XCTAssertEqual((payload["control/requestedAt"] as? [String:String])?[".sv"],"timestamp")
         XCTAssertNil(payload["isHeating"])
     }
     // MARK: - Widget Snapshot Parsing
 
-    func testWidgetSnapshot_parsesRealTelemetryAndRelayState() throws {
+    func testWidgetSnapshot_parsesTelemetryButDoesNotTrustLegacyIsHeating() throws {
         let json = #"{"currentTemperature":22.4,"currentHumidity":48,"targetTemperature":23,"mode":"on","isHeating":false}"#
         let snapshot = try WidgetSnapshot.fromDeviceJSON(Data(json.utf8))
         XCTAssertEqual(snapshot.temperature, 22.4)
         XCTAssertEqual(snapshot.humidity, 48)
         XCTAssertEqual(snapshot.targetTemperature, 23)
-        XCTAssertEqual(snapshot.isHeating, false)
+        XCTAssertNil(snapshot.isHeating, "Legacy command state is not a relay ACK")
         XCTAssertEqual(snapshot.mode, "on")
     }
 
@@ -764,4 +768,32 @@ final class ThermostatCommandTests: XCTestCase {
         let decoded = try JSONDecoder().decode(WidgetSnapshot.self, from: JSONEncoder().encode(snapshot))
         XCTAssertEqual(decoded, snapshot)
     }
+    private func feedbackFixture(on: Bool = true, mode: String = "on") -> [String:Any] {
+        let n = 1792526400000.0
+        return ["mode":"off", "targetTemperature":25.0,
+            "control":["id":"cfg1","mode":mode,"targetTemperature":22.5],
+            "feedback":[
+                "controller":["protocol":1,"sessionId":"c32","lastSeen":n,"measurementAt":n-10000,
+                    "sensorValid":true,"controlReady":true,"mode":mode,"controlId":"cfg1","decisionId":"d1","requestedOn":on],
+                "relayRequest":["id":"d1","controllerSession":"c32","controlId":"cfg1","on":on,"mode":mode],
+                "relay":["protocol":1,"sessionId":"r1","lastSeen":n,"controllerSession":"c32",
+                    "controlId":"cfg1","decisionId":"d1","outputOn":on,"reason":"applied","appliedAt":n-2000]]]
+    }
+    private func feedbackSnapshot(_ fixture:[String:Any], milliseconds:Double=1792526400000) throws -> WidgetSnapshot {
+        try WidgetSnapshot.fromDeviceJSON(JSONSerialization.data(withJSONObject:fixture),
+            now:Date(timeIntervalSince1970:milliseconds/1000))
+    }
+    func testWidgetSnapshot_correlatedAckAndCanonicalConfig() throws {
+        let s=try feedbackSnapshot(feedbackFixture())
+        XCTAssertEqual(s.isHeating,true);XCTAssertEqual(s.mode,"on");XCTAssertEqual(s.targetTemperature,22.5)
+        XCTAssertEqual(try feedbackSnapshot(feedbackFixture(on:false,mode:"off")).isHeating,false)
+        XCTAssertEqual(try feedbackSnapshot(feedbackFixture(on:false,mode:"manual")).isHeating,false)
+        XCTAssertNil(try feedbackSnapshot(feedbackFixture(on:true,mode:"manual")).isHeating)
+    }
+    func testWidgetSnapshot_oldRevisionAndStaleAckAreUnknown() throws {
+        var f=feedbackFixture();f["control"]=["id":"newer","mode":"manual"]
+        XCTAssertNil(try feedbackSnapshot(f).isHeating)
+        XCTAssertNil(try feedbackSnapshot(feedbackFixture(),milliseconds:1792526475001).isHeating)
+    }
+
 }

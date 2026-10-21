@@ -37,23 +37,59 @@ struct WidgetSnapshot: Codable, Equatable, Sendable {
             let result = value.doubleValue
             return result.isFinite && range.contains(result) ? result : nil
         }
-        let rawMode = json["mode"] as? String
-        let mode = ["on", "off"].contains(rawMode ?? "") ? rawMode : nil
-        var heating: Bool?
-        if let value = json["isHeating"] as? NSNumber,
-           CFGetTypeID(value) == CFBooleanGetTypeID() {
-            heating = value.boolValue
-        }
+        let control = json["control"] as? [String: Any] ?? [:]
+        let rawMode = control["mode"] as? String ?? json["mode"] as? String
+        let mode = ["on", "off", "manual"].contains(rawMode ?? "") ? rawMode : nil
+        // Never treat the commanded legacy isHeating value as an ESP8266 ACK.
+        let heating = verifiedOutput(json, now: now)
+        let canonicalTarget = (control["targetTemperature"] as? NSNumber)?.doubleValue
+        let target = canonicalTarget.flatMap { $0.isFinite && (10...30).contains($0) ? $0 : nil }
         return WidgetSnapshot(
             temperature: number("currentTemperature", range: -40...85),
             humidity: number("currentHumidity", range: 0...100) ?? number("humidity", range: 0...100),
-            targetTemperature: number("targetTemperature", range: 10...30),
+            targetTemperature: target ?? number("targetTemperature", range: 10...30),
             mode: mode,
             isHeating: heating,
             observedAtMilliseconds: now.timeIntervalSince1970 * 1000,
             commandAtMilliseconds: nil
         )
     }
+    private static func verifiedOutput(_ json: [String: Any], now: Date) -> Bool? {
+        let ms = now.timeIntervalSince1970 * 1000
+        func fresh(_ raw: Any?, _ age: Double) -> Bool {
+            guard let n = raw as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() else { return false }
+            let v = n.doubleValue
+            return v.isFinite && v >= 1704067200000 && ms - v >= -5000 && ms - v <= age
+        }
+        func boolean(_ raw: Any?) -> Bool? {
+            guard let n = raw as? NSNumber, CFGetTypeID(n) == CFBooleanGetTypeID() else { return nil }
+            return n.boolValue
+        }
+        let all = json["feedback"] as? [String: Any] ?? [:]
+        let c = all["controller"] as? [String: Any] ?? [:]
+        let r = all["relay"] as? [String: Any] ?? [:]
+        let q = all["relayRequest"] as? [String: Any] ?? [:]
+        let control = json["control"] as? [String: Any] ?? [:]
+        guard c["protocol"] as? Int == 1, r["protocol"] as? Int == 1,
+              fresh(c["lastSeen"],75000), fresh(r["lastSeen"],75000), fresh(c["measurementAt"],90000),
+              boolean(c["sensorValid"]) == true, boolean(c["controlReady"]) == true,
+              let session=c["sessionId"] as? String, !session.isEmpty,
+              let relaySession=r["sessionId"] as? String, !relaySession.isEmpty,
+              let id=c["controlId"] as? String, !id.isEmpty,
+              let decision=c["decisionId"] as? String, !decision.isEmpty,
+              let mode=c["mode"] as? String, ["on","off","manual"].contains(mode),
+              let requested=boolean(c["requestedOn"]), let output=boolean(r["outputOn"]),
+              r["reason"] as? String == "applied", fresh(r["appliedAt"],366*24*3600000),
+              q["id"] as? String == decision, q["controlId"] as? String == id,
+              q["controllerSession"] as? String == session, q["mode"] as? String == mode,
+              boolean(q["on"]) == requested,
+              r["controllerSession"] as? String == session, r["controlId"] as? String == id,
+              r["decisionId"] as? String == decision, output == requested,
+              mode == "on" || !output else { return nil }
+        if let latest=control["id"] as? String, !latest.isEmpty, latest != id { return nil }
+        return output
+    }
+
 }
 
 enum WidgetSnapshotStore {

@@ -266,37 +266,9 @@ class ScheduleProvider with ChangeNotifier {
 
   // Method to add a timer to periodically check and apply schedule
   void startScheduleChecker(ThermostatProvider thermostatProvider) {
-    // Dispose of any existing timer first
+    // V10: ESP32 alone executes schedules. A phone timer would bypass Manual
+    // and create competing control revisions while the app is foregrounded.
     _timer?.cancel();
-
-    // Create a new timer that checks every minute
-    _timer = Timer.periodic(const Duration(minutes: 1), (Timer t) {
-      final activeEntry = findActiveScheduleEntry();
-      if (activeEntry != null) {
-        // Apply the active entry's settings
-        // Map schedule modes to thermostat modes if necessary
-        String thermostatMode = activeEntry.mode;
-        if (thermostatMode == 'heating_on') {
-          thermostatMode = 'on';
-        } else if (thermostatMode == 'heating_off') thermostatMode = 'off';
-        // 'manual' maps directly to 'manual'
-
-        // Check if thermostatProvider and its thermostat are available before updating
-        if (thermostatProvider.thermostat != null) {
-          thermostatProvider.updateMode(thermostatMode);
-          thermostatProvider.updateTemperature(activeEntry.targetTemperature);
-          print(
-              'Applying schedule: Mode: ${activeEntry.mode}, Temp: ${activeEntry.targetTemperature}');
-        } else {
-          print(
-              'Thermostat provider or thermostat not available, cannot apply schedule.');
-        }
-      } else {
-        // If no schedule is active, should we revert to a default mode or leave the current setting?
-        // For now, let's leave the current setting unless we decide otherwise.
-        print('No active schedule.');
-      }
-    });
   }
 
   void stopScheduleChecker() {

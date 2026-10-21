@@ -55,7 +55,7 @@ class WidgetService {
     if (FirebaseAuth.instance.currentUser == null) return;
     if (!temperature.isFinite || !humidity.isFinite || !targetTemp.isFinite) return;
     if (temperature < -40 || temperature > 85 || humidity < 0 || humidity > 100 ||
-        targetTemp < 10 || targetTemp > 30 || !['on', 'off'].contains(mode)) return;
+        targetTemp < 10 || targetTemp > 30 || !['on', 'off', 'manual'].contains(mode)) return;
     try {
       await initialize();
       await HomeWidget.saveWidgetData<String>(_snapshotKey, jsonEncode({

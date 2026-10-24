@@ -188,12 +188,14 @@ class ThermostatProvider with ChangeNotifier {
     _connectionSub = _database.child('.info/connected').onValue.listen((e) {
       if (generation != _generation) return;
       _connected = e.snapshot.value == true;
+      _pushWidgetUpdate(_raw);
       notifyListeners();
     });
     _offsetSub = _database.child('.info/serverTimeOffset').onValue.listen((e) {
       if (generation != _generation) return;
       _timeReady = e.snapshot.value is num;
       _serverOffset = (e.snapshot.value as num?)?.toInt() ?? 0;
+      _pushWidgetUpdate(_raw);
       notifyListeners();
     });
     _feedbackClock = Timer.periodic(const Duration(seconds: 5), (_) {
@@ -235,14 +237,19 @@ class ThermostatProvider with ChangeNotifier {
         humidity is! num ||
         target is! num ||
         mode is! String) return;
+    final feedback = heatingFeedback;
     WidgetService.updateWidget(
       temperature: temperature.toDouble(),
       humidity: humidity.toDouble(),
-      isHeating: heatingFeedback.relay == RelayState.on
+      isHeating: feedback.relay == RelayState.on
           ? true
-          : heatingFeedback.relay == RelayState.off
+          : feedback.relay == RelayState.off
               ? false
               : null,
+      // Convert the server-based expiry to the phone clock used by WidgetKit.
+      heatingValidUntilMilliseconds: feedback.heatingValidUntil == null
+          ? null
+          : feedback.heatingValidUntil! - _serverOffset,
       mode: mode,
       targetTemp: target.toDouble(),
     );

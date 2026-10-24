@@ -6,10 +6,12 @@ struct ThermostatEntry: TimelineEntry {
     let snapshot: WidgetSnapshot?
     let notice: String?
     static var preview: ThermostatEntry {
-        ThermostatEntry(date: Date(), snapshot: WidgetSnapshot(
+        let now = Date()
+        return ThermostatEntry(date: now, snapshot: WidgetSnapshot(
             temperature: 22.4, humidity: 48, targetTemperature: 23,
             mode: "on", isHeating: true,
-            observedAtMilliseconds: Date().addingTimeInterval(-60).timeIntervalSince1970 * 1000
+            observedAtMilliseconds: now.timeIntervalSince1970 * 1000,
+            heatingValidUntilMilliseconds: now.addingTimeInterval(60).timeIntervalSince1970 * 1000
         ), notice: nil)
     }
 }
@@ -47,7 +49,14 @@ struct ThermostatProvider: TimelineProvider {
                 entry = ThermostatEntry(date: Date(), snapshot: snapshot, notice: notice)
             }
             // iOS decides the actual refresh time; this is not a live sensor stream.
-            completion(Timeline(entries: [entry], policy: .after(Date().addingTimeInterval(15 * 60))))
+            var entries = [entry]
+            if entry.notice == nil,
+               entry.snapshot?.confirmedHeating(at: entry.date) != nil,
+               let expiry = entry.snapshot?.heatingExpiryDate, expiry >= entry.date {
+                entries.append(ThermostatEntry(date: expiry.addingTimeInterval(0.001),
+                    snapshot: entry.snapshot, notice: nil))
+            }
+            completion(Timeline(entries: entries, policy: .after(Date().addingTimeInterval(15 * 60))))
         }
     }
 }
@@ -59,6 +68,9 @@ struct ThermostatWidgetEntryView: View {
     @Environment(\.widgetFamily) private var family
     @Environment(\.colorScheme) private var scheme
     private var snapshot: WidgetSnapshot? { entry.snapshot }
+    private var confirmedHeating: Bool? {
+        entry.notice == nil ? snapshot?.confirmedHeating(at: entry.date) : nil
+    }
     private var medium: Bool { family == .systemMedium }
     private var ink: Color { scheme == .dark ? Color(red: 0.96, green: 0.96, blue: 0.93) : Color(red: 0.13, green: 0.15, blue: 0.12) }
     private var muted: Color { scheme == .dark ? Color(red: 0.70, green: 0.73, blue: 0.68) : Color(red: 0.45, green: 0.48, blue: 0.43) }
@@ -76,12 +88,33 @@ struct ThermostatWidgetEntryView: View {
         if snapshot?.isStale != false { return "Eski veri" }
         if snapshot?.mode == "manual" { return "Manuel" }
         if snapshot?.mode == "off" { return "Kapalı" }
-        if snapshot?.isHeating == true { return "Röle açık" }
-        if snapshot?.mode == "on" { return "Isıtma açık" }
+        if confirmedHeating == true { return "Röle açık" }
+        if confirmedHeating == false { return "Röle kapalı" }
+        if snapshot?.mode == "on" { return "Röle doğrulanamadı" }
         return "Durum bilinmiyor"
     }
-    private var statusIcon: String {
-        snapshot?.isHeating == true ? "flame" : "power"
+    // Decorative status only: no Button, menu, animation or device command.
+    private var flameBadge: some View {
+        let known = confirmedHeating != nil
+        let color: Color = confirmedHeating == true ? .orange : muted
+        let label = confirmedHeating == true ? "Röle açık, cihaz onaylı" :
+            confirmedHeating == false ? "Röle kapalı, cihaz onaylı" : "Röle durumu doğrulanamıyor"
+        return ZStack(alignment: .bottomTrailing) {
+            Image(systemName: known ? "flame.fill" : "flame")
+                .font(.system(size: 20, weight: .medium))
+                .foregroundStyle(color)
+                .opacity(known ? 1 : 0.55)
+            if !known {
+                Image(systemName: "questionmark.circle.fill")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(muted)
+                    .background(surface, in: Circle())
+            }
+        }
+        .frame(width: 26, height: 26)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+        .allowsHitTesting(false)
     }
     var body: some View {
         Group {
@@ -116,7 +149,7 @@ struct ThermostatWidgetEntryView: View {
     }
     private var metrics: some View {
         HStack(spacing: 8) {
-            Label(status, systemImage: statusIcon).foregroundStyle(accent)
+            Text(status).foregroundStyle(accent)
             Spacer(minLength: 2)
             Label("%\(number(snapshot?.humidity))", systemImage: "drop").foregroundStyle(muted)
         }.font(.system(size: 11)).lineLimit(1).minimumScaleFactor(0.75)
@@ -135,7 +168,7 @@ struct ThermostatWidgetEntryView: View {
     }
     private var smallView: some View {
         VStack(alignment: .leading, spacing: 3) {
-            brand
+            HStack { brand; Spacer(minLength: 4); flameBadge }
             Spacer(minLength: 1)
             temperature
             HStack(spacing: 4) {
@@ -154,6 +187,7 @@ struct ThermostatWidgetEntryView: View {
                 brand
                 Spacer()
                 freshness.font(.system(size: 10))
+                flameBadge
             }
             HStack(spacing: 13) {
                 VStack(alignment: .leading, spacing: 3) {
@@ -206,7 +240,7 @@ struct ThermostatWidgetEntryView: View {
     }
     private var emptyView: some View {
         VStack(alignment: .leading, spacing: 10) {
-            brand
+            HStack { brand; Spacer(minLength: 4); flameBadge }
             Spacer(minLength: 0)
             Text("Veri yok").font(.system(size: 24, weight: .medium))
             Text(entry.notice ?? "Uygulamayı açıp giriş yap.")
@@ -222,6 +256,9 @@ struct ThermostatLockScreenView: View {
     let entry: ThermostatEntry
     @Environment(\.widgetFamily) private var family
     private var snapshot: WidgetSnapshot? { entry.snapshot }
+    private var confirmedHeating: Bool? {
+        entry.notice == nil ? snapshot?.confirmedHeating(at: entry.date) : nil
+    }
 
     private func degrees(_ value: Double?, precise: Bool = false) -> String {
         guard let value = value, value.isFinite else { return "—" }
@@ -238,8 +275,9 @@ struct ThermostatLockScreenView: View {
         if snapshot?.isStale != false { return "Eski veri" }
         if snapshot?.mode == "manual" { return "Manuel" }
         if snapshot?.mode == "off" { return "Kapalı" }
-        if snapshot?.isHeating == true { return "Röle açık" }
-        if snapshot?.mode == "on" { return "Isıtma açık" }
+        if confirmedHeating == true { return "Röle açık" }
+        if confirmedHeating == false { return "Röle kapalı" }
+        if snapshot?.mode == "on" { return "Röle doğrulanamadı" }
         return "Durum bilinmiyor"
     }
 
@@ -248,7 +286,7 @@ struct ThermostatLockScreenView: View {
             return "exclamationmark.circle"
         }
         if snapshot?.hasPendingCommand == true { return "clock" }
-        return snapshot?.isHeating == true ? "flame.fill" : "power"
+        return confirmedHeating == true ? "flame.fill" : "power"
     }
 
     var body: some View {

@@ -12,6 +12,7 @@ import '../widgets/home_floor_plan.dart';
 import '../widgets/home_pager.dart';
 import '../models/home_plan.dart';
 import '../models/wiz_command_feedback.dart';
+import '../models/wiz_auto_retry.dart';
 import '../services/home_plan_preferences.dart';
 
 /// WiZ commands go through an authenticated ESP bridge. No local-network
@@ -54,6 +55,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
   bool _timeReady = false;
   final Set<String> _sending = {};
   final Map<String, int> _writeStarted = {};
+  final Map<String, WizAutoRetry> _autoRetries = {};
   double _roomDrag = 0;
   int _clockTick = 0;
 
@@ -66,24 +68,22 @@ class WizLightsScreenState extends State<WizLightsScreen> {
         .ref('.info/serverTimeOffset')
         .onValue
         .listen((e) {
-          if (!mounted) return;
-          _refresh(() {
-            _serverOffset = (e.snapshot.value as num?)?.toInt() ?? 0;
-            _timeReady = e.snapshot.value is num;
-          });
-        });
-    _connection = FirebaseDatabase.instance
-        .ref('.info/connected')
-        .onValue
-        .listen((e) {
-          if (mounted) _refresh(() => _connected = e.snapshot.value == true);
-        });
+      if (!mounted) return;
+      _refresh(() {
+        _serverOffset = (e.snapshot.value as num?)?.toInt() ?? 0;
+        _timeReady = e.snapshot.value is num;
+      });
+    });
+    _connection =
+        FirebaseDatabase.instance.ref('.info/connected').onValue.listen((e) {
+      if (mounted) _refresh(() => _connected = e.snapshot.value == true);
+    });
     _clock = Timer.periodic(const Duration(seconds: 1), (_) {
       _clockTick++;
+      _runAutoRetries();
       final commands = _map(_homeData['commands']);
       final reports = _map(_map(_homeData['status'])['lights']);
-      final waiting =
-          _sending.isNotEmpty ||
+      final waiting = _sending.isNotEmpty ||
           commands.entries.any(
             (e) => _commandFeedback(
               e.key,
@@ -110,6 +110,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
       _dataError = false;
       _sending.clear();
       _writeStarted.clear();
+      _autoRetries.clear();
       _selectedRoom = null;
       _selectedFixture = null;
       _bindings = {};
@@ -131,6 +132,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
           _dataReady = true;
           _dataError = false;
         });
+        _runAutoRetries();
       },
       onError: (Object error, StackTrace stack) {
         if (!mounted || binding != _binding) return;
@@ -164,8 +166,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
     if (owner == null ||
         !_planReady ||
         _savingPlan ||
-        FirebaseAuth.instance.currentUser?.uid != owner)
-      return;
+        FirebaseAuth.instance.currentUser?.uid != owner) return;
     final generation = _binding;
     final lights = _map(_map(_homeData['config'])['lights']);
     _refresh(() => _savingPlan = true);
@@ -256,6 +257,14 @@ class WizLightsScreenState extends State<WizLightsScreen> {
     try {
       final ref = home.child('commands/$id');
       final commandId = ref.push().key!;
+      final ip = _map(_map(_map(_homeData['config'])['lights'])[id])['ip'];
+      if (ip is String && ip.isNotEmpty) {
+        _autoRetries[id] = WizAutoRetry(
+          commandId: commandId,
+          params: params,
+          ip: ip,
+        );
+      }
       // These are absolute, idempotent values, never toggle commands.
       await ref.set({
         'id': commandId,
@@ -266,6 +275,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
       });
       // The inline state gives immediate feedback; no queued success snackbar.
     } catch (_) {
+      if (mounted && generation == _binding) _autoRetries.remove(id);
       if (mounted && generation == _binding)
         _message(
           'Komut gönderilemedi. İnterneti ve Firebase izinlerini kontrol et.',
@@ -335,8 +345,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
               FilledButton(
                 onPressed: () {
                   final parts = ip.text.trim().split('.');
-                  final valid =
-                      parts.length == 4 &&
+                  final valid = parts.length == 4 &&
                       parts.every(
                         (p) =>
                             RegExp(r'^\d{1,3}$').hasMatch(p) &&
@@ -459,32 +468,32 @@ class WizLightsScreenState extends State<WizLightsScreen> {
   void openSettings() => _openPanel('Ev ve ampul ayarları', _settingsBody);
 
   void _openControls(String id) => _openPanel(
-    'Işık kontrolleri',
-    () => _liveData((lights, reported, commands, bridgeOnline) {
-      if (!lights.containsKey(id)) {
-        return const Center(child: Text('Bu ampul artık kayıtlı değil.'));
-      }
-      return ListView(
-        padding: const EdgeInsets.all(20),
-        children: [
-          BridgeConnectionCard(
-            connected: _connected,
-            timeReady: _timeReady,
-            bridgeOnline: bridgeOnline,
-          ),
-          const SizedBox(height: 16),
-          _lightCard(
-            id,
-            _map(lights[id]),
-            _map(reported[id]),
-            _map(commands[id]),
-            bridgeOnline,
-            allowRemove: false,
-          ),
-        ],
+        'Işık kontrolleri',
+        () => _liveData((lights, reported, commands, bridgeOnline) {
+          if (!lights.containsKey(id)) {
+            return const Center(child: Text('Bu ampul artık kayıtlı değil.'));
+          }
+          return ListView(
+            padding: const EdgeInsets.all(20),
+            children: [
+              BridgeConnectionCard(
+                connected: _connected,
+                timeReady: _timeReady,
+                bridgeOnline: bridgeOnline,
+              ),
+              const SizedBox(height: 16),
+              _lightCard(
+                id,
+                _map(lights[id]),
+                _map(reported[id]),
+                _map(commands[id]),
+                bridgeOnline,
+                allowRemove: false,
+              ),
+            ],
+          );
+        }),
       );
-    }),
-  );
 
   void _openPanel(String title, Widget Function() content) {
     if (!mounted) return;
@@ -509,8 +518,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
       Map<String, dynamic> reported,
       Map<String, dynamic> commands,
       bool bridgeOnline,
-    )
-    content,
+    ) content,
   ) {
     if (_home == null)
       return const Center(child: Text('Önce uygulamada giriş yap.'));
@@ -636,8 +644,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
               isExpanded: true,
               decoration: InputDecoration(
                 labelText: f.name,
-                helperText:
-                    _bindings.containsKey(f.id) &&
+                helperText: _bindings.containsKey(f.id) &&
                         HomePlanPreferences.resolve(f.id, _bindings, lights) ==
                             null
                     ? 'Ampul/IP değişti. Yeniden eşleştir.'
@@ -671,19 +678,138 @@ class WizLightsScreenState extends State<WizLightsScreen> {
     );
   }
 
+  bool get _retrySessionReady =>
+      mounted &&
+      WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed &&
+      _owner != null &&
+      FirebaseAuth.instance.currentUser?.uid == _owner &&
+      _connected &&
+      _timeReady &&
+      _dataReady &&
+      !_dataError;
+
+  bool _retryDeviceReady(String id, WizAutoRetry attempt) {
+    final config = _map(_map(_map(_homeData['config'])['lights'])[id]);
+    final status = _map(_homeData['status']);
+    final report = _map(_map(status['lights'])[id]);
+    return _retrySessionReady &&
+        config['ip'] == attempt.ip &&
+        (report['ip'] == null || report['ip'] == attempt.ip) &&
+        _fresh(_map(status['bridge'])['lastSeen'], 90000);
+  }
+
+  void _runAutoRetries() {
+    if (!_retrySessionReady) return;
+    final commands = _map(_homeData['commands']);
+    final reports = _map(_map(_homeData['status'])['lights']);
+    for (final entry in _autoRetries.entries.toList()) {
+      final id = entry.key, attempt = entry.value;
+      if (_sending.contains(id) || !_retryDeviceReady(id, attempt)) continue;
+      final report = _map(reports[id]);
+      final current = report['online'] == true &&
+          report['ip'] == attempt.ip &&
+          _fresh(report['reportedAt'], 90000);
+      if (!attempt.eligible(
+        command: _map(commands[id]),
+        report: report,
+        now: _now,
+        reportIsCurrent: current,
+      )) continue;
+      // Spend the budget BEFORE asynchronous work, including failures/aborts.
+      attempt.consumed = true;
+      _refresh(() {
+        _sending.add(id);
+        _writeStarted[id] = _now;
+      });
+      unawaited(_retryAutomatically(id, attempt));
+    }
+  }
+
+  Future<void> _retryAutomatically(String id, WizAutoRetry attempt) async {
+    final home = _home;
+    final generation = _binding;
+    if (home == null) return;
+    final ref = home.child('commands/$id');
+    final newId = ref.push().key!;
+    try {
+      final result = await ref.runTransaction((raw) {
+        if (generation != _binding ||
+            !identical(_autoRetries[id], attempt) ||
+            !_retryDeviceReady(id, attempt)) return Transaction.abort();
+        final report = _map(_map(_map(_homeData['status'])['lights'])[id]);
+        final current = report['online'] == true &&
+            report['ip'] == attempt.ip &&
+            _fresh(report['reportedAt'], 90000);
+        if (!attempt.stillNeedsRetry(
+            command: _map(raw),
+            report: report,
+            now: _now,
+            reportIsCurrent: current)) {
+          return Transaction.abort();
+        }
+        final replacement = attempt.replacement(
+          _map(raw),
+          newId: newId,
+          now: _now,
+        );
+        return replacement == null
+            ? Transaction.abort()
+            : Transaction.success(replacement);
+      }, applyLocally: false);
+      if (mounted &&
+          generation == _binding &&
+          identical(_autoRetries[id], attempt) &&
+          result.committed) {
+        attempt.commandId = newId;
+        attempt.responseStartedAt = _now;
+      }
+    } catch (_) {
+      if (mounted && generation == _binding) {
+        _message(
+          'Otomatik tekrar gönderilemedi. Durumu kontrol edip elle tekrar deneyebilirsin.',
+        );
+      }
+    } finally {
+      if (mounted && generation == _binding) {
+        _refresh(() {
+          _sending.remove(id);
+          _writeStarted.remove(id);
+        });
+      }
+    }
+  }
+
   WizCommandFeedback _commandFeedback(
     String id,
     Map<String, dynamic> command,
     Map<String, dynamic> report,
     bool current,
-  ) => WizCommandFeedback.evaluate(
-    command: command,
-    report: report,
-    now: _now,
-    reportIsCurrent: current,
-    writing: _sending.contains(id),
-    writeStartedAt: _writeStarted[id],
-  );
+  ) {
+    final attempt = _autoRetries[id];
+    final second = attempt != null &&
+        attempt.commandId == command['id'] &&
+        attempt.responseStartedAt != null;
+    final feedback = WizCommandFeedback.evaluate(
+      command: command,
+      report: report,
+      now: _now,
+      reportIsCurrent: current,
+      writing: _sending.contains(id),
+      writeStartedAt: _writeStarted[id],
+      responseStartedAt: second ? attempt.responseStartedAt : null,
+    );
+    if (!second || feedback.message == null) return feedback;
+    return WizCommandFeedback(
+      pending: feedback.pending,
+      retryable: feedback.retryable,
+      params: feedback.params,
+      message: feedback.pending
+          ? 'İkinci deneme · ${feedback.message}'
+          : feedback.retryable
+              ? 'İkinci deneme de doğrulanamadı · Tekrar deneyebilirsin'
+              : feedback.message,
+    );
+  }
 
   void _retryCommand(String id) {
     final lights = _map(_map(_homeData['config'])['lights']);
@@ -691,8 +817,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
     final config = _map(lights[id]);
     final report = _map(_map(status['lights'])[id]);
     final command = _map(_map(_homeData['commands'])[id]);
-    final current =
-        _connected &&
+    final current = _connected &&
         report['online'] == true &&
         report['ip'] == config['ip'] &&
         _fresh(report['reportedAt'], 90000);
@@ -703,8 +828,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
         _dataError ||
         !_fresh(_map(status['bridge'])['lastSeen'], 90000) ||
         !feedback.retryable ||
-        _sending.contains(id))
-      return;
+        _sending.contains(id)) return;
     // Repeat the same absolute values. NEVER invert an unconfirmed old state.
     _send(id, feedback.params);
   }
@@ -721,25 +845,22 @@ class WizLightsScreenState extends State<WizLightsScreen> {
     final config = _map(lights[id]),
         report = _map(reported[id]),
         command = _map(commands[id]);
-    final fresh =
-        _connected &&
+    final fresh = _connected &&
         bridgeOnline &&
         report['online'] == true &&
         report['ip'] == config['ip'] &&
         _fresh(report['reportedAt'], 90000);
     final feedback = _commandFeedback(id, command, report, fresh);
     final pending = feedback.pending;
-    final bool? on = fresh && report['state'] is bool
-        ? report['state'] as bool
-        : null;
+    final bool? on =
+        fresh && report['state'] is bool ? report['state'] as bool : null;
     return FixtureState(
       assigned: true,
       on: on,
       pending: pending,
       retryable: feedback.retryable,
       feedback: feedback.message,
-      controllable:
-          (on != null || feedback.retryable) &&
+      controllable: (on != null || feedback.retryable) &&
           !_dataError &&
           _connected &&
           _timeReady &&
@@ -817,16 +938,14 @@ class WizLightsScreenState extends State<WizLightsScreen> {
           ? null
           : HomePlanPreferences.resolve(fixture, _bindings, lights);
       final state = states[fixture] ?? const FixtureState();
-      final enabled =
-          id != null &&
+      final enabled = id != null &&
           state.controllable &&
           _connected &&
           _timeReady &&
           bridgeOnline &&
           !state.pending;
       final sensor = thermostat.thermostat;
-      final hasReading =
-          room.sensor &&
+      final hasReading = room.sensor &&
           sensor != null &&
           !thermostat.isLoading &&
           thermostat.error == null;
@@ -917,15 +1036,12 @@ class WizLightsScreenState extends State<WizLightsScreen> {
       child: GestureDetector(
         key: const ValueKey('room-swipe-back'),
         behavior: HitTestBehavior.translucent,
-        onHorizontalDragStart: roomId != null && active
-            ? (_) => _roomDrag = 0
-            : null,
-        onHorizontalDragUpdate: roomId != null && active
-            ? (d) => _roomDrag += d.delta.dx
-            : null,
-        onHorizontalDragCancel: roomId != null && active
-            ? () => _roomDrag = 0
-            : null,
+        onHorizontalDragStart:
+            roomId != null && active ? (_) => _roomDrag = 0 : null,
+        onHorizontalDragUpdate:
+            roomId != null && active ? (d) => _roomDrag += d.delta.dx : null,
+        onHorizontalDragCancel:
+            roomId != null && active ? () => _roomDrag = 0 : null,
         onHorizontalDragEnd: roomId != null && active
             ? (d) {
                 if (_roomDrag > 48 || (d.primaryVelocity ?? 0) > 250)
@@ -961,25 +1077,22 @@ class WizLightsScreenState extends State<WizLightsScreen> {
     bool allowRemove = true,
   }) {
     final name = config['name'] as String? ?? 'Ampul';
-    final fresh =
-        bridgeOnline &&
+    final fresh = bridgeOnline &&
         report['online'] == true &&
         report['ip'] == config['ip'] &&
         _fresh(report['reportedAt'], 90000);
     final knownState = fresh && report['state'] is bool;
     final feedback = _commandFeedback(id, command, report, fresh);
     final pending = feedback.pending;
-    final text =
-        feedback.message ??
+    final text = feedback.message ??
         (!fresh
             ? 'Güncel ampul yanıtı yok'
             : knownState
-            ? (report['state'] == true
-                  ? 'Ampul bildirimi: Açık'
-                  : 'Ampul bildirimi: Kapalı')
-            : 'Durum bilinmiyor');
-    final enabled =
-        !_dataError &&
+                ? (report['state'] == true
+                    ? 'Ampul bildirimi: Açık'
+                    : 'Ampul bildirimi: Kapalı')
+                : 'Durum bilinmiyor');
+    final enabled = !_dataError &&
         _connected &&
         _timeReady &&
         bridgeOnline &&
@@ -1040,18 +1153,16 @@ class WizLightsScreenState extends State<WizLightsScreen> {
               children: [
                 Expanded(
                   child: FilledButton(
-                    onPressed: enabled
-                        ? () => _send(id, {'state': true})
-                        : null,
+                    onPressed:
+                        enabled ? () => _send(id, {'state': true}) : null,
                     child: const Text('Aç'),
                   ),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: enabled
-                        ? () => _send(id, {'state': false})
-                        : null,
+                    onPressed:
+                        enabled ? () => _send(id, {'state': false}) : null,
                     child: const Text('Kapat'),
                   ),
                 ),
@@ -1120,27 +1231,27 @@ class _BrightnessControlState extends State<_BrightnessControl> {
 
   @override
   Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Text('Parlaklık: %${_value.round()}'),
-      Slider(
-        value: _value,
-        min: 10,
-        max: 100,
-        divisions: 90,
-        onChanged: widget.enabled
-            ? (v) => setState(() {
-                _dragging = true;
-                _value = v;
-              })
-            : null,
-        onChangeEnd: widget.enabled
-            ? (v) {
-                _dragging = false;
-                widget.onCommit(v);
-              }
-            : null,
-      ),
-    ],
-  );
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Parlaklık: %${_value.round()}'),
+          Slider(
+            value: _value,
+            min: 10,
+            max: 100,
+            divisions: 90,
+            onChanged: widget.enabled
+                ? (v) => setState(() {
+                      _dragging = true;
+                      _value = v;
+                    })
+                : null,
+            onChangeEnd: widget.enabled
+                ? (v) {
+                    _dragging = false;
+                    widget.onCommit(v);
+                  }
+                : null,
+          ),
+        ],
+      );
 }

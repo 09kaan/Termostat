@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:geolocator/geolocator.dart';
+
 import '../providers/settings_provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/geofence_service.dart';
@@ -11,7 +12,9 @@ class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
 
   static void _showLocationPicker(
-      BuildContext context, SettingsProvider settings) async {
+    BuildContext context,
+    SettingsProvider settings,
+  ) async {
     // Check location permissions
     LocationPermission permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
@@ -28,7 +31,8 @@ class SettingsScreen extends StatelessWidget {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-              'Location permissions are permanently denied, we cannot request permissions.'),
+            'Location permissions are permanently denied, we cannot request permissions.',
+          ),
         ),
       );
       return;
@@ -94,17 +98,16 @@ class SettingsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Ayarlar'),
-      ),
+      appBar: AppBar(title: const Text('Ayarlar')),
       body: Consumer<SettingsProvider>(
         builder: (context, settings, child) {
           return ListView(
             padding: const EdgeInsets.all(16.0),
             children: [
               AppearanceSelector(
-                  value: settings.appearance,
-                  onChanged: settings.setAppearance),
+                value: settings.appearance,
+                onChanged: settings.setAppearance,
+              ),
               const SizedBox(height: 16),
               ListTile(
                 title: const Text('Koyu mod'),
@@ -120,17 +123,16 @@ class SettingsScreen extends StatelessWidget {
                 padding: EdgeInsets.symmetric(vertical: 8.0),
                 child: Text(
                   'Konum ayarları',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
               ),
               ListTile(
                 title: const Text('Konum otomasyonu'),
-                subtitle: Text(settings.geofenceEnabled
-                    ? 'Aktif — konum takibi açık'
-                    : 'Kapalı'),
+                subtitle: Text(
+                  settings.geofenceEnabled
+                      ? 'Açık — iOS izleme durumu aşağıda'
+                      : 'Kapalı',
+                ),
                 trailing: Switch(
                   value: settings.geofenceEnabled,
                   onChanged: (isOn) {
@@ -143,19 +145,49 @@ class SettingsScreen extends StatelessWidget {
                   listenable: ThermostatGeofenceService(),
                   builder: (context, _) {
                     final geo = ThermostatGeofenceService();
+                    final diagnostic = geo.diagnostics;
                     final dist = geo.lastDistance;
-                    final distText = dist >= 1000
+                    final distText = dist == null
+                        ? 'Güncel mesafe yok'
+                        : dist >= 1000
                         ? '${(dist / 1000).toStringAsFixed(1)} km'
                         : '${dist.toStringAsFixed(0)} m';
-                    final statusIcon = geo.isInsideGeofence ? '🏠' : '🚶';
-                    final statusText =
-                        geo.isInsideGeofence ? 'Evdesiniz' : 'Dışarıdasınız';
+                    final inside = diagnostic?.inside;
+                    final statusText = inside == null
+                        ? 'Bölge durumu bekleniyor'
+                        : inside
+                        ? 'Son bölge durumu: Evde'
+                        : 'Son bölge durumu: Dışarıda';
+                    String timeText(DateTime time) =>
+                        '${time.day.toString().padLeft(2, '0')}.${time.month.toString().padLeft(2, '0')} '
+                        '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+                    final details = <String>[
+                      diagnostic?.status ?? 'iOS izleme bilgisi alınamadı',
+                      '$statusText — $distText',
+                      if (dist != null && diagnostic?.accuracy != null)
+                        'Konum doğruluğu: ±${diagnostic!.accuracy!.round()} m',
+                      if (diagnostic?.sampledAt != null)
+                        'Son konum örneği: ${timeText(diagnostic!.sampledAt!)}',
+                      if (diagnostic?.lastEventAt != null)
+                        'Son olay: ${diagnostic!.lastEvent ?? 'Bölge geçişi'} · ${timeText(diagnostic.lastEventAt!)}',
+                      if (geo.lastAutomationMessage != null)
+                        geo.lastAutomationMessage!,
+                      if (diagnostic?.lastResultAt != null)
+                        'Son sonuç: ${timeText(diagnostic!.lastResultAt!)}',
+                    ];
                     return ListTile(
-                      leading: Text(statusIcon,
-                          style: const TextStyle(fontSize: 24)),
-                      title: Text('$statusText — $distText'),
-                      subtitle: Text(geo.lastAutomationMessage ??
-                          'iOS konum olayları izleniyor'),
+                      leading: Icon(
+                        diagnostic?.monitoring == true
+                            ? Icons.location_on_outlined
+                            : Icons.location_off_outlined,
+                      ),
+                      title: const Text('Konum izleme durumu'),
+                      subtitle: Text(details.join('\n')),
+                      trailing: IconButton(
+                        tooltip: 'Konum izleme bilgisini yenile',
+                        icon: const Icon(Icons.refresh),
+                        onPressed: () => geo.refreshDiagnostics(),
+                      ),
                     );
                   },
                 ),
@@ -176,10 +208,7 @@ class SettingsScreen extends StatelessWidget {
                 padding: EdgeInsets.symmetric(vertical: 8.0),
                 child: Text(
                   'Hesap',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
               ),
               Consumer<AuthProvider>(
@@ -203,7 +232,8 @@ class SettingsScreen extends StatelessWidget {
                                 builder: (context) => AlertDialog(
                                   title: const Text('Çıkış Yap'),
                                   content: const Text(
-                                      'Çıkış yapmak istediğinize emin misiniz?'),
+                                    'Çıkış yapmak istediğinize emin misiniz?',
+                                  ),
                                   actions: [
                                     TextButton(
                                       onPressed: () =>

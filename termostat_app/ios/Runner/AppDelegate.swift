@@ -43,11 +43,15 @@ import FirebaseAuth
                     }
                     result(self.startMonitoring(latitude: lat, longitude: lng, fallback: radius))
                 case "stopMonitoring": self.stopMonitoring(); result(true)
+                case "getMonitoringDiagnostics": result(self.monitoringDiagnostics())
                 case "getDistance":
                     if let args = call.arguments as? [String: Any], let lat = args["latitude"] as? Double,
-                       let lng = args["longitude"] as? Double, let location = self.locationManager.location {
+                       let lng = args["longitude"] as? Double, let location = self.locationManager.location,
+                       location.horizontalAccuracy >= 0,
+                       Date().timeIntervalSince(location.timestamp) >= -5,
+                       Date().timeIntervalSince(location.timestamp) <= 300 {
                         result(location.distance(from: CLLocation(latitude: lat, longitude: lng)))
-                    } else { result(0.0) }
+                    } else { result(nil) }
                 case "isMonitoring": result(self.locationManager.monitoredRegions.contains { $0.identifier.hasPrefix(self.prefix) })
                 case "getLastAutomationResult": result(UserDefaults.standard.string(forKey: self.resultKey))
                 default: result(FlutterMethodNotImplemented)
@@ -61,6 +65,44 @@ import FirebaseAuth
     override func application(_ application: UIApplication,
         performFetchWithCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
         completionHandler(.noData) // Cached GPS samples never manufacture crossings.
+    }
+    // Cached data only: diagnostics must not start continuous GPS updates.
+    private func monitoringDiagnostics() -> [String: Any] {
+        let d = UserDefaults.standard
+        var value: [String: Any] = [
+            "enabled": d.bool(forKey: "geofence_enabled"),
+            "servicesEnabled": CLLocationManager.locationServicesEnabled(),
+            "regionCount": locationManager.monitoredRegions.filter { $0.identifier.hasPrefix(prefix) }.count,
+            "registeredRegions": kinds.filter { kind in
+                locationManager.monitoredRegions.contains { $0.identifier == prefix + kind }
+            }
+        ]
+        switch CLLocationManager.authorizationStatus() {
+        case .authorizedAlways: value["authorization"] = "always"
+        case .authorizedWhenInUse: value["authorization"] = "whenInUse"
+        case .denied: value["authorization"] = "denied"
+        case .restricted: value["authorization"] = "restricted"
+        default: value["authorization"] = "notDetermined"
+        }
+        if let inside = d.object(forKey: prefix + "heatEntry_inside") as? Bool {
+            value["inside"] = inside
+        }
+        if let sample = locationManager.location {
+            value["sampledAt"] = Int64(sample.timestamp.timeIntervalSince1970 * 1000)
+            value["accuracy"] = sample.horizontalAccuracy
+            if d.object(forKey: "geofence_lat") != nil && d.object(forKey: "geofence_lng") != nil {
+                value["distance"] = sample.distance(from: CLLocation(latitude: d.double(forKey: "geofence_lat"),
+                    longitude: d.double(forKey: "geofence_lng")))
+            }
+        }
+        value["lastEventAt"] = d.object(forKey: "geofence_last_event_at")
+        value["lastEvent"] = d.string(forKey: "geofence_last_event")
+        value["lastResultAt"] = d.object(forKey: "geofence_last_result_at")
+        value["lastResult"] = d.string(forKey: resultKey)
+        return value
+    }
+    private func diagnosticsChanged() {
+        methodChannel?.invokeMethod("onDiagnosticsChanged", arguments: nil)
     }
     private func validIds(_ value: Any?) -> [String] {
         Array(Set((value as? [String] ?? []).filter { $0.range(of: "^lamp[1-8]$", options: .regularExpression) != nil })).sorted()
@@ -90,6 +132,9 @@ import FirebaseAuth
             if previous["ownerUid"] as? String != owner {
                 for kind in kinds { defaults.removeObject(forKey: prefix + kind + "_inside") }
                 defaults.removeObject(forKey: "isInsideGeofence")
+                for key in [resultKey, "geofence_last_result_at", "geofence_last_event", "geofence_last_event_at"] {
+                    defaults.removeObject(forKey: key)
+                }
             }
             defaults.set(policy, forKey: policyKey)
             if policy["enabled"] as? Bool != true { stopMonitoring() }
@@ -169,6 +214,11 @@ import FirebaseAuth
             methodChannel?.invokeMethod(entering ? "onEnterRegion":"onExitRegion",arguments:nil)
         }
         guard (kind.hasSuffix("Entry") && entering) || (kind.hasSuffix("Exit") && !entering) else { return }
+        let names = ["heatEntry": "Kombi giriş bölgesi", "heatExit": "Kombi çıkış bölgesi",
+                     "lightEntry": "Işık giriş bölgesi", "lightExit": "Işık çıkış bölgesi"]
+        d.set(Int64(Date().timeIntervalSince1970 * 1000), forKey: "geofence_last_event_at")
+        d.set(names[kind] ?? kind, forKey: "geofence_last_event")
+        diagnosticsChanged()
         runActions(kind:kind, entering:entering, policy:policy)
     }
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {}
@@ -176,7 +226,12 @@ import FirebaseAuth
     func locationManager(_ manager: CLLocationManager, monitoringDidFailFor region: CLRegion?, withError error: Error) {
         publishResult("Konum bölgesi izlenemedi. Konum iznini ve iOS ayarlarını kontrol et.")
     }
-    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {}
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        diagnosticsChanged()
+    }
+    func locationManager(_ manager: CLLocationManager, didStartMonitoringFor region: CLRegion) {
+        diagnosticsChanged()
+    }
     private func finish(_ key: String) {
         tasks[key]=nil; tickets[key]=nil
         if let id=backgrounds.removeValue(forKey:key), id != .invalid { UIApplication.shared.endBackgroundTask(id) }
@@ -279,6 +334,8 @@ import FirebaseAuth
     }
     private func publishResult(_ message:String) {
         UserDefaults.standard.set(message,forKey:resultKey)
+        UserDefaults.standard.set(Int64(Date().timeIntervalSince1970 * 1000), forKey: "geofence_last_result_at")
+        diagnosticsChanged()
         methodChannel?.invokeMethod("onAutomationResult",arguments:["message":message])
         let content=UNMutableNotificationContent();content.title="Termostat · Konum otomasyonu";content.body=message;content.sound = .default
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier:"geofence_result",content:content,trigger:nil))

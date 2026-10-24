@@ -1,12 +1,13 @@
 /// Presentation of an absolute WiZ request, never an optimistic bulb state.
-/// The bridge's 60s TTL/protocol is unchanged. After 12s expose MANUAL retry
-/// instead of silently disabling controls for the whole TTL. No auto-retries.
+/// The bridge TTL/protocol is unchanged. Fresh matching device state can settle
+/// a lost command response; rejection and expiry remain explicit failures.
 class WizCommandFeedback {
-  const WizCommandFeedback(
-      {this.pending = false,
-      this.retryable = false,
-      this.message,
-      this.params = const {}});
+  const WizCommandFeedback({
+    this.pending = false,
+    this.retryable = false,
+    this.message,
+    this.params = const {},
+  });
   final bool pending, retryable;
   final String? message;
   final Map<String, dynamic> params;
@@ -30,13 +31,15 @@ class WizCommandFeedback {
     return p;
   }
 
-  static WizCommandFeedback evaluate(
-      {required Map<String, dynamic> command,
-      required Map<String, dynamic> report,
-      required int now,
-      required bool reportIsCurrent,
-      bool writing = false,
-      int? writeStartedAt}) {
+  static WizCommandFeedback evaluate({
+    required Map<String, dynamic> command,
+    required Map<String, dynamic> report,
+    required int now,
+    required bool reportIsCurrent,
+    bool writing = false,
+    int? writeStartedAt,
+    int? responseStartedAt,
+  }) {
     final params = safeParams(command['params']);
     final hasCommand =
         command['id'] is String && (command['id'] as String).isNotEmpty;
@@ -47,22 +50,22 @@ class WizCommandFeedback {
     if (writing) {
       final slow = writeStartedAt != null && now - writeStartedAt >= 8000;
       return WizCommandFeedback(
-          pending: true,
-          message: slow
-              ? 'Firebase onayı gecikti · bağlantıyı kontrol et'
-              : 'Firebase gönderimi onaylanıyor…');
+        pending: true,
+        message: slow
+            ? 'Firebase onayı gecikti · bağlantıyı kontrol et'
+            : 'Firebase gönderimi onaylanıyor…',
+      );
     }
     if (!hasCommand) return const WizCommandFeedback();
     if (ack && status == 'applied') return const WizCommandFeedback();
-    if (ack && const {'rejected', 'expired', 'no_response'}.contains(status)) {
+    if (ack && const {'rejected', 'expired'}.contains(status)) {
       return WizCommandFeedback(
-          retryable: params.isNotEmpty,
-          params: params,
-          message: status == 'rejected'
-              ? 'ESP komutu reddetti'
-              : status == 'expired'
-                  ? 'Komutun süresi doldu'
-                  : 'Ampul komuta yanıt vermedi');
+        retryable: params.isNotEmpty,
+        params: params,
+        message: status == 'rejected'
+            ? 'ESP komutu reddetti'
+            : 'Komutun süresi doldu',
+      );
     }
     final stamp = command['issuedAt'] is num
         ? command['issuedAt']
@@ -77,19 +80,26 @@ class WizCommandFeedback {
         reportedAt >= stamp &&
         params.isNotEmpty &&
         params.entries.every(
-            (e) => report.containsKey(e.key) && report[e.key] == e.value)) {
+          (e) => report.containsKey(e.key) && report[e.key] == e.value,
+        )) {
       return const WizCommandFeedback();
     }
-    final age = stamp is num ? now - stamp.toInt() : responseWindowMs;
+    final responseStamp = responseStartedAt ?? stamp;
+    final age =
+        responseStamp is num ? now - responseStamp.toInt() : responseWindowMs;
     if (age >= -5000 && age < responseWindowMs) {
       return WizCommandFeedback(
-          pending: true,
-          message:
-              'Ampul yanıtı bekleniyor · ${(age.clamp(0, responseWindowMs) / 1000).floor()} sn');
+        pending: true,
+        message:
+            'Ampul yanıtı bekleniyor · ${(age.clamp(0, responseWindowMs) / 1000).floor()} sn',
+      );
     }
     return WizCommandFeedback(
-        retryable: params.isNotEmpty,
-        params: params,
-        message: 'Yanıt doğrulanamadı');
+      retryable: params.isNotEmpty,
+      params: params,
+      message: ack && status == 'no_response'
+          ? 'Ampul komuta yanıt vermedi'
+          : 'Yanıt doğrulanamadı',
+    );
   }
 }

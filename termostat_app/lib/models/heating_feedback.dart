@@ -10,11 +10,32 @@ class HeatingFeedback {
       this.relay = RelayState.unknown,
       this.detail = 'Cihaz raporu bekleniyor',
       this.reportedOutput,
+      this.controllerLastSeenAt,
+      this.relayLastSeenAt,
+      this.measurementAt,
+      this.evaluatedAt,
       this.phoneConnected = false});
   final LinkState esp32, esp8266;
   final RelayState relay;
   final String detail;
   final bool? reportedOutput;
+
+  /// Device timestamps, not the time the app read Firebase.
+  final int? controllerLastSeenAt, relayLastSeenAt, measurementAt, evaluatedAt;
+  int? get heatingValidUntil {
+    if ((relay != RelayState.on && relay != RelayState.off) ||
+        controllerLastSeenAt == null ||
+        relayLastSeenAt == null ||
+        measurementAt == null) {
+      return null;
+    }
+    return [
+      controllerLastSeenAt! + 75000,
+      relayLastSeenAt! + 75000,
+      measurementAt! + 90000
+    ].reduce((a, b) => a < b ? a : b);
+  }
+
   final bool phoneConnected;
   LinkState get link => !phoneConnected
       ? LinkState.unknown
@@ -37,14 +58,31 @@ class HeatingFeedback {
       required bool connected,
       required bool timeReady,
       String? pendingControlId}) {
-    if (!connected || !timeReady)
+    final all = _map(data['feedback']);
+    final c = _map(all['controller']), r = _map(all['relay']);
+    int? timestamp(dynamic value) => value is num &&
+            value.isFinite &&
+            value >= 1704067200000 &&
+            value <= now + 5000
+        ? value.toInt()
+        : null;
+    int? reportTime(Map<String, dynamic> report) =>
+        report['protocol'] == 1 && _id(report['sessionId'])
+            ? timestamp(report['lastSeen'])
+            : null;
+    final controllerAt = reportTime(c), relayAt = reportTime(r);
+    final measuredAt = timestamp(c['measurementAt']);
+    if (!connected || !timeReady) {
       return HeatingFeedback(
           phoneConnected: connected,
+          controllerLastSeenAt: controllerAt,
+          relayLastSeenAt: relayAt,
+          measurementAt: measuredAt,
+          evaluatedAt: timeReady ? now : null,
           detail: connected
               ? 'Sunucu saati doğrulanıyor'
               : 'Uygulama bağlantısı doğrulanamıyor');
-    final all = _map(data['feedback']);
-    final c = _map(all['controller']), r = _map(all['relay']);
+    }
     final request = _map(all['relayRequest']);
     final control = _map(data['control']);
     LinkState link(Map<String, dynamic> report) => report['protocol'] != 1 ||
@@ -62,6 +100,10 @@ class HeatingFeedback {
         phoneConnected: true,
         esp32: cLink,
         esp8266: rLink,
+        controllerLastSeenAt: controllerAt,
+        relayLastSeenAt: relayAt,
+        measurementAt: measuredAt,
+        evaluatedAt: now,
         relay: state,
         detail: output == true && state != RelayState.on
             ? '$text · ESP8266 son raporu: röle açık'

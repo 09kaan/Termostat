@@ -13,6 +13,26 @@ struct WidgetSnapshot: Codable, Equatable, Sendable {
     var isHeating: Bool?
     var observedAtMilliseconds: Double?
     var commandAtMilliseconds: Double?
+    // Optional for backwards-compatible decoding; old snapshots fail closed.
+    var heatingValidUntilMilliseconds: Double?
+
+    var heatingExpiryDate: Date? {
+        guard let ms = heatingValidUntilMilliseconds, ms.isFinite else { return nil }
+        return Date(timeIntervalSince1970: ms / 1000)
+    }
+    /// A cached successful ACK must not remain orange after its device heartbeat expires.
+    func confirmedHeating(at date: Date = Date()) -> Bool? {
+        let now = date.timeIntervalSince1970 * 1000
+        guard let expiry = heatingValidUntilMilliseconds, expiry.isFinite,
+              let observed = observedAtMilliseconds, observed.isFinite,
+              observed >= 1704067200000, now.isFinite,
+              now - observed >= -5000, now <= expiry,
+              expiry >= observed, expiry - observed <= 80000,
+              !hasPendingCommand, let output = isHeating,
+              let mode = mode, ["on", "off", "manual"].contains(mode),
+              mode == "on" || !output else { return nil }
+        return output
+    }
 
     var observedDate: Date? {
         observedAtMilliseconds.map { Date(timeIntervalSince1970: $0 / 1000) }
@@ -51,8 +71,19 @@ struct WidgetSnapshot: Codable, Equatable, Sendable {
             mode: mode,
             isHeating: heating,
             observedAtMilliseconds: now.timeIntervalSince1970 * 1000,
-            commandAtMilliseconds: nil
+            commandAtMilliseconds: nil,
+            heatingValidUntilMilliseconds: heating == nil ? nil : outputExpiry(json)
         )
+    }
+    private static func outputExpiry(_ json: [String: Any]) -> Double? {
+        let all = json["feedback"] as? [String: Any] ?? [:]
+        let c = all["controller"] as? [String: Any] ?? [:]
+        let r = all["relay"] as? [String: Any] ?? [:]
+        guard let controller = c["lastSeen"] as? NSNumber,
+              let relay = r["lastSeen"] as? NSNumber,
+              let measurement = c["measurementAt"] as? NSNumber else { return nil }
+        return min(controller.doubleValue + 75000,
+                   min(relay.doubleValue + 75000, measurement.doubleValue + 90000))
     }
     private static func verifiedOutput(_ json: [String: Any], now: Date) -> Bool? {
         let ms = now.timeIntervalSince1970 * 1000
@@ -131,6 +162,7 @@ enum WidgetSnapshotStore {
             snapshot.targetTemperature = temperature
             snapshot.isHeating = nil
         }
+        snapshot.heatingValidUntilMilliseconds = nil
         // Do not refresh the sensor timestamp when only a command is acknowledged.
         snapshot.commandAtMilliseconds = Date().timeIntervalSince1970 * 1000
         write(snapshot)

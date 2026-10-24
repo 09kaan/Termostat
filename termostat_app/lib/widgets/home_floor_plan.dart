@@ -247,7 +247,9 @@ class _HomeFloorPlanState extends State<HomeFloorPlan> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    '${failed.length} lamba yanıt vermiyor.',
+                    failed.length == 1
+                        ? '${HomePlan.room(failed.single.roomId).name}: ${widget.states[failed.single.id]?.feedback ?? 'Yanıt doğrulanamadı'}'
+                        : '${failed.length} lamba için yanıt doğrulanamadı.',
                     style: TextStyle(color: noticeText),
                   ),
                 ),

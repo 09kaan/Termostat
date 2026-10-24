@@ -48,6 +48,7 @@ class WidgetService {
     required double temperature,
     required double humidity,
     required bool? isHeating,
+    int? heatingValidUntilMilliseconds,
     required String mode,
     required double targetTemp,
   }) async {
@@ -63,7 +64,8 @@ class WidgetService {
         'humidity': humidity,
         'targetTemperature': targetTemp,
         'mode': mode,
-        'isHeating': isHeating,
+        'isHeating': heatingValidUntilMilliseconds == null ? null : isHeating,
+        'heatingValidUntilMilliseconds': heatingValidUntilMilliseconds,
         'observedAtMilliseconds': DateTime.now().millisecondsSinceEpoch,
         'commandAtMilliseconds': null,
       }));

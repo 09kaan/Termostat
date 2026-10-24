@@ -1,4 +1,5 @@
 import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -6,11 +7,14 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
 import '../providers/settings_provider.dart';
+import '../models/geofence_diagnostics.dart';
 
 /// iOS is the single command writer, including when Flutter is not running.
 /// Flutter receives state/results only; it never duplicates heating/light commands.
-class ThermostatGeofenceService extends ChangeNotifier {
+class ThermostatGeofenceService extends ChangeNotifier
+    with WidgetsBindingObserver {
   static final ThermostatGeofenceService _instance =
       ThermostatGeofenceService._internal();
   factory ThermostatGeofenceService() => _instance;
@@ -19,7 +23,9 @@ class ThermostatGeofenceService extends ChangeNotifier {
   bool _isStarted = false;
   bool _isInitialized = false;
   bool _isInsideGeofence = true;
-  double _lastDistance = 0;
+  GeofenceDiagnostics? _diagnostics;
+  Timer? _sampleExpiry;
+  bool _observingLifecycle = false;
   String? _lastAutomationMessage;
   SettingsProvider? _settingsProvider;
   StreamSubscription<User?>? _authSubscription;
@@ -28,6 +34,11 @@ class ThermostatGeofenceService extends ChangeNotifier {
   Future<void> initialize(BuildContext context) async {
     if (_isInitialized) return;
     if (!_supported) return;
+    if (!_observingLifecycle) {
+      WidgetsBinding.instance.addObserver(this);
+      _observingLifecycle = true;
+    }
+    await refreshDiagnostics();
     try {
       final settings = Provider.of<SettingsProvider>(context, listen: false);
       await settings.ready;
@@ -36,15 +47,19 @@ class ThermostatGeofenceService extends ChangeNotifier {
       if (permission == LocationPermission.denied)
         permission = await Geolocator.requestPermission();
       if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever) return;
+          permission == LocationPermission.deniedForever) {
+        await refreshDiagnostics();
+        return;
+      }
       _settingsProvider = settings;
       final prefs = await SharedPreferences.getInstance();
       _isInsideGeofence = prefs.getBool('isInsideGeofence') ?? true;
       _channel.setMethodCallHandler(_handleNativeEvent);
       _isInitialized = true;
       _authSubscription?.cancel();
-      _authSubscription =
-          FirebaseAuth.instance.authStateChanges().listen((user) {
+      _authSubscription = FirebaseAuth.instance.authStateChanges().listen((
+        user,
+      ) {
         if (user == null) {
           unawaited(stop());
         } else {
@@ -52,8 +67,10 @@ class ThermostatGeofenceService extends ChangeNotifier {
         }
       });
       await _syncNativePolicy();
-      _lastAutomationMessage =
-          await _channel.invokeMethod<String>('getLastAutomationResult');
+      _lastAutomationMessage = await _channel.invokeMethod<String>(
+        'getLastAutomationResult',
+      );
+      await refreshDiagnostics();
       notifyListeners();
     } catch (_) {
       debugPrint('Konum otomasyonu başlatılamadı.');
@@ -118,8 +135,8 @@ class ThermostatGeofenceService extends ChangeNotifier {
     switch (call.method) {
       case 'onEnterRegion':
         _isInsideGeofence = true;
-        _lastDistance = 0;
         await _saveState(true);
+        await _updateDistance();
         break;
       case 'onExitRegion':
         _isInsideGeofence = false;
@@ -132,16 +149,16 @@ class ThermostatGeofenceService extends ChangeNotifier {
         if (state == 'inside' || state == 'outside') {
           _isInsideGeofence = state == 'inside';
           await _saveState(_isInsideGeofence);
-          if (_isInsideGeofence) {
-            _lastDistance = 0;
-          } else {
-            await _updateDistance();
-          }
+          await _updateDistance();
         }
+        break;
+      case 'onDiagnosticsChanged':
+        await refreshDiagnostics();
         break;
       case 'onAutomationResult':
         final args = call.arguments as Map?;
         _lastAutomationMessage = args?['message'] as String?;
+        await refreshDiagnostics();
         break;
     }
     notifyListeners();
@@ -155,16 +172,45 @@ class ThermostatGeofenceService extends ChangeNotifier {
     } catch (_) {}
   }
 
-  Future<void> _updateDistance() async {
-    final settings = _settingsProvider;
-    if (settings == null) return;
+  Future<void> _updateDistance() => refreshDiagnostics();
+
+  Future<void> refreshDiagnostics() async {
+    if (!_supported) return;
+    _sampleExpiry?.cancel();
     try {
-      _lastDistance = await _channel.invokeMethod<double>('getDistance', {
-            'latitude': settings.homeLatitude,
-            'longitude': settings.homeLongitude,
-          }) ??
-          0;
-    } catch (_) {}
+      final raw = await _channel.invokeMapMethod<String, dynamic>(
+        'getMonitoringDiagnostics',
+      );
+      if (raw != null) {
+        _diagnostics = GeofenceDiagnostics.fromMap(
+          raw,
+          now: DateTime.now().millisecondsSinceEpoch,
+        );
+        if (_diagnostics!.inside != null)
+          _isInsideGeofence = _diagnostics!.inside!;
+        _lastAutomationMessage =
+            raw['lastResult'] is String ? raw['lastResult'] as String : null;
+        final sampledAt = _diagnostics!.sampledAt;
+        if (_diagnostics!.enabled &&
+            _diagnostics!.distance != null &&
+            sampledAt != null) {
+          final remaining = sampledAt.millisecondsSinceEpoch +
+              300001 -
+              DateTime.now().millisecondsSinceEpoch;
+          if (remaining > 0)
+            _sampleExpiry =
+                Timer(Duration(milliseconds: remaining), notifyListeners);
+        }
+      }
+    } catch (_) {
+      _diagnostics = null; // Never show cached zero as a verified location.
+    }
+    notifyListeners();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) unawaited(refreshDiagnostics());
   }
 
   Future<void> updateGeofence(BuildContext context) async {
@@ -198,13 +244,22 @@ class ThermostatGeofenceService extends ChangeNotifier {
       } catch (_) {}
     }
     _isStarted = false;
+    await refreshDiagnostics();
     notifyListeners();
   }
 
   bool get isRunning => _isStarted;
   bool get isInitialized => _isInitialized;
   bool get isInsideGeofence => _isInsideGeofence;
-  double get lastDistance => _lastDistance;
+  double? get lastDistance {
+    final sample = _diagnostics?.sampledAt;
+    if (sample == null) return null;
+    final age =
+        DateTime.now().millisecondsSinceEpoch - sample.millisecondsSinceEpoch;
+    return age >= -5000 && age <= 300000 ? _diagnostics?.distance : null;
+  }
+
+  GeofenceDiagnostics? get diagnostics => _diagnostics;
   String? get lastAutomationMessage => _lastAutomationMessage;
   void resetState() {
     unawaited(stop());
@@ -212,5 +267,10 @@ class ThermostatGeofenceService extends ChangeNotifier {
     _authSubscription = null;
     _isInitialized = false;
     _isInsideGeofence = true;
+    _diagnostics = null;
+    _lastAutomationMessage = null;
+    _sampleExpiry?.cancel();
+    if (_observingLifecycle) WidgetsBinding.instance.removeObserver(this);
+    _observingLifecycle = false;
   }
 }

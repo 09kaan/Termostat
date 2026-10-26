@@ -1,3 +1,5 @@
+import 'connectivity_recovery.dart';
+
 enum LinkState { unknown, online, offline }
 
 enum RelayState { unknown, pending, on, off, mismatch }
@@ -14,7 +16,8 @@ class HeatingFeedback {
       this.relayLastSeenAt,
       this.measurementAt,
       this.evaluatedAt,
-      this.phoneConnected = false});
+      this.phoneConnected = false,
+      this.recovery});
   final LinkState esp32, esp8266;
   final RelayState relay;
   final String detail;
@@ -37,6 +40,7 @@ class HeatingFeedback {
   }
 
   final bool phoneConnected;
+  final ConnectivityRecovery? recovery;
   LinkState get link => !phoneConnected
       ? LinkState.unknown
       : esp32 == LinkState.offline || esp8266 == LinkState.offline
@@ -72,9 +76,11 @@ class HeatingFeedback {
             : null;
     final controllerAt = reportTime(c), relayAt = reportTime(r);
     final measuredAt = timestamp(c['measurementAt']);
+    final recovery = ConnectivityRecovery.parse(c['recovery'], controllerAt);
     if (!connected || !timeReady) {
       return HeatingFeedback(
           phoneConnected: connected,
+          recovery: recovery,
           controllerLastSeenAt: controllerAt,
           relayLastSeenAt: relayAt,
           measurementAt: measuredAt,
@@ -98,6 +104,7 @@ class HeatingFeedback {
         : null;
     HeatingFeedback result(RelayState state, String text) => HeatingFeedback(
         phoneConnected: true,
+        recovery: recovery,
         esp32: cLink,
         esp8266: rLink,
         controllerLastSeenAt: controllerAt,

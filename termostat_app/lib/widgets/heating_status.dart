@@ -56,6 +56,19 @@ class _HeatingStatusState extends State<HeatingStatus> {
                 Text('ESP32 · ${_label(current.esp32)}'),
                 _reportTime(context, current.controllerLastSeenAt,
                     current.evaluatedAt, 'controller-report-time'),
+                if (current.esp32 != LinkState.online)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(
+                      current.recovery?.describe(
+                            phoneConnected: current.phoneConnected,
+                            now: current.evaluatedAt,
+                          ) ??
+                          'Reset planı bilgisi yok. Bu bilgi için güncel ESP32 kurtarma yazılımından yeni rapor gerekli.',
+                      key: const ValueKey('controller-recovery-plan'),
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
                 const SizedBox(height: 12),
                 Text('ESP8266 · ${_label(current.esp8266)}'),
                 _reportTime(context, current.relayLastSeenAt,

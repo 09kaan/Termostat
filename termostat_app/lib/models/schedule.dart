@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 class Schedule {
@@ -15,25 +14,29 @@ class Schedule {
   });
 
   factory Schedule.fromJson(Map<String, dynamic> json) {
-    final scheduleId = json['id'] as String;
+    final scheduleId = json['id'] as String? ?? '';
     final entriesRaw = json['entries'];
     List<ScheduleEntry> entriesList = [];
     if (entriesRaw is List) {
       entriesList = entriesRaw
           .whereType<Map>()
           .map((e) => ScheduleEntry.fromJson(
-              Map<String, dynamic>.from(e as Map),
+              Map<String, dynamic>.from(e),
               parentScheduleId: scheduleId))
           .toList();
-    } else {
-      // Optionally log or handle the unexpected type
-      print('Unexpected entries type: \${entriesRaw}');
+    } else if (entriesRaw is Map) {
+      entriesList = entriesRaw.values
+          .whereType<Map>()
+          .map((e) => ScheduleEntry.fromJson(
+              Map<String, dynamic>.from(e),
+              parentScheduleId: scheduleId))
+          .toList();
     }
     return Schedule(
       id: scheduleId,
-      name: json['name'] as String,
+      name: json['name'] as String? ?? 'Ana Program',
       entries: entriesList,
-      isEnabled: json['isEnabled'] as bool,
+      isEnabled: json['isEnabled'] as bool? ?? true,
     );
   }
 
@@ -67,13 +70,13 @@ class ScheduleEntry {
   final TimeOfDay startTime;
   final TimeOfDay endTime;
   final double targetTemperature;
-  final String mode; // 'heat', 'cool', 'auto', 'off'
-  final String scheduleId; // Link back to the parent schedule
-  final bool isEnabled; // Whether this specific entry is enabled
+  final String mode; // 'heating_on', 'heating_off', 'manual'
+  final String scheduleId;
+  final bool isEnabled;
   final String repeat; // 'once', 'weekly', 'daily'
-  final List<String>
-      excludedDates; // Dates when this recurring entry is excluded (YYYY-MM-DD)
-  final String? specificDate; // For 'once' entries: YYYY-MM-DD
+  final List<String> excludedDates; // YYYY-MM-DD
+  final String? specificDate; // YYYY-MM-DD
+  final bool optimumStart; // Soğuk havada (<5°C) erken başlatma şalteri
 
   ScheduleEntry({
     required this.id,
@@ -84,33 +87,34 @@ class ScheduleEntry {
     required this.mode,
     required this.scheduleId,
     this.isEnabled = true,
-    this.repeat = 'once', // Default to 'once'
-    this.excludedDates = const [], // Default to empty list
-    this.specificDate, // specificDate is optional
+    this.repeat = 'once',
+    this.excludedDates = const [],
+    this.specificDate,
+    this.optimumStart = false,
   });
 
   factory ScheduleEntry.fromJson(Map<String, dynamic> json,
       {String? parentScheduleId}) {
     return ScheduleEntry(
-      id: json['id'] as String,
-      dayOfWeek: json['dayOfWeek'] as int,
+      id: json['id']?.toString() ?? '',
+      dayOfWeek: (json['dayOfWeek'] as num?)?.toInt() ?? 1,
       startTime: TimeOfDay(
-        hour: json['startTimeHour'] as int,
-        minute: json['startTimeMinute'] as int,
+        hour: (json['startTimeHour'] as num?)?.toInt() ?? 8,
+        minute: (json['startTimeMinute'] as num?)?.toInt() ?? 0,
       ),
       endTime: TimeOfDay(
-        hour: json['endTimeHour'] as int,
-        minute: json['endTimeMinute'] as int,
+        hour: (json['endTimeHour'] as num?)?.toInt() ?? 9,
+        minute: (json['endTimeMinute'] as num?)?.toInt() ?? 0,
       ),
       targetTemperature:
-          (json['targetTemperature'] as num?)?.toDouble() ?? 20.0,
-      mode: json['mode'] as String? ?? 'heat',
+          (json['targetTemperature'] as num?)?.toDouble() ?? 21.0,
+      mode: json['mode'] as String? ?? 'heating_on',
       scheduleId: parentScheduleId ?? json['scheduleId'] as String? ?? '',
       isEnabled: json['isEnabled'] as bool? ?? true,
       repeat: json['repeat'] as String? ?? 'once',
-      excludedDates: List<String>.from(
-          json['excludedDates'] as List? ?? []), // Read excludedDates
-      specificDate: json['specificDate'] as String?, // Read specificDate
+      excludedDates: List<String>.from(json['excludedDates'] as List? ?? []),
+      specificDate: json['specificDate'] as String?,
+      optimumStart: json['optimumStart'] as bool? ?? false,
     );
   }
 
@@ -127,8 +131,9 @@ class ScheduleEntry {
       'scheduleId': scheduleId,
       'isEnabled': isEnabled,
       'repeat': repeat,
-      'excludedDates': excludedDates, // Include excludedDates in JSON
-      'specificDate': specificDate, // Include specificDate in JSON
+      'excludedDates': excludedDates,
+      'specificDate': specificDate,
+      'optimumStart': optimumStart,
     };
   }
 
@@ -143,7 +148,8 @@ class ScheduleEntry {
     bool? isEnabled,
     String? repeat,
     List<String>? excludedDates,
-    String? specificDate, // Add specificDate to copyWith
+    String? specificDate,
+    bool? optimumStart,
   }) {
     return ScheduleEntry(
       id: id ?? this.id,
@@ -157,6 +163,7 @@ class ScheduleEntry {
       repeat: repeat ?? this.repeat,
       excludedDates: excludedDates ?? this.excludedDates,
       specificDate: specificDate ?? this.specificDate,
+      optimumStart: optimumStart ?? this.optimumStart,
     );
   }
 }

@@ -1,9 +1,12 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/material.dart';
 import '../constants/app_constants.dart';
+import '../utils/haptics_helper.dart';
 
 class SettingsProvider extends ChangeNotifier {
   final String? Function() _ownerUid;
@@ -16,6 +19,25 @@ class SettingsProvider extends ChangeNotifier {
   String _theme = 'light'; // Default theme is light
   String _appearance = 'original';
   Future<void> _appearanceWrite = Future<void>.value();
+
+  // Görsel durum geçişleri, Haptik ve Enerji maliyeti ayarları
+  bool _enableDynamicBackground = true;
+  bool _enableHaptics = true;
+  double _hourlyEnergyCost = 12.5;
+
+  // Hava durumu destekli akıllı şalterler
+  bool _optimumStartEnabled = false;
+  bool _frostProtectionEnabled = true;
+  double _frostProtectionTemp = 12.0;
+  bool _warmWeatherAutoOff = false;
+
+  bool get enableDynamicBackground => _enableDynamicBackground;
+  bool get enableHaptics => _enableHaptics;
+  double get hourlyEnergyCost => _hourlyEnergyCost;
+  bool get optimumStartEnabled => _optimumStartEnabled;
+  bool get frostProtectionEnabled => _frostProtectionEnabled;
+  double get frostProtectionTemp => _frostProtectionTemp;
+  bool get warmWeatherAutoOff => _warmWeatherAutoOff;
 
   // Geofence settings
   double _homeLatitude = AppConstants.defaultHomeLatitude;
@@ -39,10 +61,12 @@ class SettingsProvider extends ChangeNotifier {
   Map<String, String> get entryLightIPs => Map<String, String>.unmodifiable(
       _entryLightsByOwner[_ownerUid()] ?? <String, String>{});
   Set<String> get entryLightIds => entryLightIPs.keys.toSet();
+
   Future<void> setEntryHeating(bool value) async {
     final prefs = await SharedPreferences.getInstance();
-    if (!await prefs.setBool('geo_v10_entry_heating', value))
+    if (!await prefs.setBool('geo_v10_entry_heating', value)) {
       throw StateError('Kaydedilemedi');
+    }
     _entryHeating = value;
     notifyListeners();
   }
@@ -59,15 +83,17 @@ class SettingsProvider extends ChangeNotifier {
     }
     final prefs = await SharedPreferences.getInstance();
     if (!await prefs.setString(
-        'geo_v10_entry_lights_$ownerUid', jsonEncode(next)))
+        'geo_v10_entry_lights_$ownerUid', jsonEncode(next))) {
       throw StateError('Kaydedilemedi');
+    }
     _entryLightsByOwner[ownerUid] = next;
     notifyListeners();
   }
 
   Future<void> setAutomationRadius(String key, double value) async {
-    if (!value.isFinite || value < 50 || value > 2000)
+    if (!value.isFinite || value < 50 || value > 2000) {
       throw ArgumentError.value(value);
+    }
     final current = <String, double>{
       'heatEntry': _heatEntryRadius,
       'heatExit': _heatExitRadius,
@@ -82,8 +108,9 @@ class SettingsProvider extends ChangeNotifier {
           'Çıkış mesafesi giriş mesafesinden küçük olamaz. Önce çıkış mesafesini artır.');
     }
     final prefs = await SharedPreferences.getInstance();
-    if (!await prefs.setDouble('geo_v10_$key', value))
+    if (!await prefs.setDouble('geo_v10_$key', value)) {
       throw StateError('Kaydedilemedi');
+    }
     _heatEntryRadius = current['heatEntry']!;
     _heatExitRadius = current['heatExit']!;
     _lightEntryRadius = current['lightEntry']!;
@@ -142,7 +169,7 @@ class SettingsProvider extends ChangeNotifier {
 
   bool get isLoading => _isLoading;
   String? get error => _error;
-  String get theme => _theme; // Getter for the theme
+  String get theme => _theme;
   String get appearance => _appearance;
 
   // Geofence getters
@@ -164,6 +191,18 @@ class SettingsProvider extends ChangeNotifier {
       final appearance = prefs.getString('app_appearance_v1');
       _appearance = appearance == 'warm_minimal' ? 'warm_minimal' : 'original';
 
+      _enableDynamicBackground = prefs.getBool('enable_dynamic_bg') ?? true;
+      _enableHaptics = prefs.getBool('enable_haptics') ?? true;
+      _hourlyEnergyCost = prefs.getDouble('hourly_energy_cost') ?? 12.5;
+
+      // Hava durumu destekli akıllı şalterleri yükle
+      _optimumStartEnabled = prefs.getBool('weather_optimum_start') ?? false;
+      _frostProtectionEnabled =
+          prefs.getBool('weather_frost_protection') ?? true;
+      _frostProtectionTemp =
+          prefs.getDouble('weather_frost_temp') ?? 12.0;
+      _warmWeatherAutoOff = prefs.getBool('weather_warm_auto_off') ?? false;
+
       // Load geofence settings
       _homeLatitude =
           prefs.getDouble('homeLatitude') ?? AppConstants.defaultHomeLatitude;
@@ -183,16 +222,18 @@ class SettingsProvider extends ChangeNotifier {
       _heatExitRadius = radius('heatExit');
       _lightEntryRadius = radius('lightEntry');
       _lightExitRadius = radius('lightExit');
-      if (_heatExitRadius < _heatEntryRadius)
+      if (_heatExitRadius < _heatEntryRadius) {
         _heatExitRadius = _heatEntryRadius;
-      if (_lightExitRadius < _lightEntryRadius)
+      }
+      if (_lightExitRadius < _lightEntryRadius) {
         _lightExitRadius = _lightEntryRadius;
+      }
       const entryPrefix = 'geo_v10_entry_lights_';
       for (final key
           in prefs.getKeys().where((k) => k.startsWith(entryPrefix))) {
         try {
           final raw = jsonDecode(prefs.getString(key) ?? '{}');
-          if (raw is Map)
+          if (raw is Map) {
             _entryLightsByOwner[key.substring(entryPrefix.length)] = {
               for (final e in raw.entries)
                 if (e.key is String &&
@@ -200,7 +241,8 @@ class SettingsProvider extends ChangeNotifier {
                     RegExp(r'^lamp[1-8]$').hasMatch(e.key))
                   e.key as String: e.value as String
             };
-        } catch (_) {/* Invalid selections stay off. */}
+          }
+        } catch (_) {}
       }
       const prefix = 'geofence_exit_lights_';
       for (final key in prefs.getKeys().where((k) => k.startsWith(prefix))) {
@@ -215,7 +257,7 @@ class SettingsProvider extends ChangeNotifier {
                   entry.key as String: entry.value as String,
             };
           }
-        } catch (_) {/* Invalid saved selection stays unselected. */}
+        } catch (_) {}
       }
     } catch (e) {
       _error = e.toString();
@@ -223,6 +265,84 @@ class SettingsProvider extends ChangeNotifier {
       _isLoading = false;
       notifyListeners();
     }
+  }
+
+  Future<void> _syncWeatherAssistantToCloud() async {
+    try {
+      if (FirebaseAuth.instance.currentUser == null) return;
+      await FirebaseDatabase.instance
+          .ref('devices/device1/weatherAssistant')
+          .update({
+        'optimumStartEnabled': _optimumStartEnabled,
+        'optimumStartLeadMinutes': 25,
+        'optimumStartOutdoorThreshold': 5.0,
+        'frostProtectionEnabled': _frostProtectionEnabled,
+        'frostProtectionTemp': _frostProtectionTemp,
+        'warmWeatherAutoOff': _warmWeatherAutoOff,
+        'warmWeatherOutdoorThreshold': 20.0,
+        'updatedAt': ServerValue.timestamp,
+      });
+    } catch (_) {}
+  }
+
+  Future<void> setOptimumStartEnabled(bool value) async {
+    _optimumStartEnabled = value;
+    HapticsHelper.modeToggle(enabled: _enableHaptics);
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('weather_optimum_start', value);
+    unawaited(_syncWeatherAssistantToCloud());
+  }
+
+  Future<void> setFrostProtectionEnabled(bool value) async {
+    _frostProtectionEnabled = value;
+    HapticsHelper.modeToggle(enabled: _enableHaptics);
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('weather_frost_protection', value);
+    unawaited(_syncWeatherAssistantToCloud());
+  }
+
+  Future<void> setFrostProtectionTemp(double value) async {
+    if (!value.isFinite || value < 5.0 || value > 18.0) return;
+    _frostProtectionTemp = value;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('weather_frost_temp', value);
+    unawaited(_syncWeatherAssistantToCloud());
+  }
+
+  Future<void> setWarmWeatherAutoOff(bool value) async {
+    _warmWeatherAutoOff = value;
+    HapticsHelper.modeToggle(enabled: _enableHaptics);
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('weather_warm_auto_off', value);
+    unawaited(_syncWeatherAssistantToCloud());
+  }
+
+  Future<void> setDynamicBackground(bool value) async {
+    _enableDynamicBackground = value;
+    HapticsHelper.modeToggle(enabled: _enableHaptics);
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('enable_dynamic_bg', value);
+  }
+
+  Future<void> setEnableHaptics(bool value) async {
+    _enableHaptics = value;
+    if (value) HapticsHelper.modeToggle(enabled: true);
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('enable_haptics', value);
+  }
+
+  Future<void> setHourlyEnergyCost(double value) async {
+    if (!value.isFinite || value < 0) return;
+    _hourlyEnergyCost = value;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('hourly_energy_cost', value);
   }
 
   Future<void> setHysteresis(double value) async {
@@ -239,8 +359,6 @@ class SettingsProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Appearance is independent of the existing light/dark setting. Serialize
-  /// writes so rapid taps cannot leave a different style saved on disk.
   Future<void> setAppearance(String value) {
     if (value != 'original' && value != 'warm_minimal') {
       return Future<void>.error(ArgumentError.value(value, 'appearance'));
@@ -255,15 +373,13 @@ class SettingsProvider extends ChangeNotifier {
           throw StateError('Tema kaydedilemedi');
         }
       } catch (_) {
-        // SharedPreferences updates its in-memory cache before disk writes.
-        // Restore that cache as well if persistence fails.
         try {
           if (previous == null) {
             await prefs.remove('app_appearance_v1');
           } else {
             await prefs.setString('app_appearance_v1', previous);
           }
-        } catch (_) {/* Keep the visible setting unchanged. */}
+        } catch (_) {}
         rethrow;
       }
       _appearance = value;
@@ -282,9 +398,10 @@ class SettingsProvider extends ChangeNotifier {
 
   Future<void> toggleTheme() async {
     _theme = _theme == 'light' ? 'dark' : 'light';
+    HapticsHelper.modeToggle(enabled: _enableHaptics);
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('theme', _theme); // Save theme to preferences
+    await prefs.setString('theme', _theme);
   }
 
   // Geofence settings methods
@@ -306,6 +423,7 @@ class SettingsProvider extends ChangeNotifier {
 
   Future<void> setGeofenceEnabled(bool enabled) async {
     _geofenceEnabled = enabled;
+    HapticsHelper.modeToggle(enabled: _enableHaptics);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('geofenceEnabled', enabled);
     notifyListeners();

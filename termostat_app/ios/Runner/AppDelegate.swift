@@ -17,6 +17,7 @@ import FirebaseAuth
     private var backgrounds: [String: UIBackgroundTaskIdentifier] = [:]
     private var tickets: [String: UUID] = [:]
     private var generation = 0
+    private var lanHomeLock = false
     private let policyKey = "geofence_exit_policy_v1"
     private let resultKey = "geofence_last_result_v1"
 
@@ -25,7 +26,10 @@ import FirebaseAuth
         GeneratedPluginRegistrant.register(with: self)
         locationManager.delegate = self
         locationManager.allowsBackgroundLocationUpdates = true
-        locationManager.pausesLocationUpdatesAutomatically = false
+        // Pil tasarrufu: Sürekli GPS yerine hücresel/Wi-Fi bölge izleme doğruluğu kullan
+        locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+        locationManager.distanceFilter = 50
+        locationManager.pausesLocationUpdatesAutomatically = true
         if let controller = window?.rootViewController as? FlutterViewController {
             let channel = FlutterMethodChannel(name: "geofence_channel", binaryMessenger: controller.binaryMessenger)
             methodChannel = channel
@@ -34,6 +38,14 @@ import FirebaseAuth
                 switch call.method {
                 case "configureExitActions":
                     self.configureActions(call.arguments as? [String: Any] ?? [:]); result(true)
+                case "setLanHomeLock":
+                    let args = call.arguments as? [String: Any]
+                    self.lanHomeLock = args?["onHomeLan"] as? Bool ?? false
+                    if self.lanHomeLock {
+                        UserDefaults.standard.set(true, forKey: self.prefix + "heatEntry_inside")
+                        UserDefaults.standard.set(true, forKey: "isInsideGeofence")
+                    }
+                    result(true)
                 case "startMonitoring":
                     guard let args = call.arguments as? [String: Any],
                           let lat = args["latitude"] as? Double, let lng = args["longitude"] as? Double,
@@ -62,11 +74,27 @@ import FirebaseAuth
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
+
     override func application(_ application: UIApplication,
         performFetchWithCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
-        completionHandler(.noData) // Cached GPS samples never manufacture crossings.
+        completionHandler(.noData)
     }
-    // Cached data only: diagnostics must not start continuous GPS updates.
+
+    /// Yalnızca poliçede gerçekten aktif olan bölgeleri izleyerek iOS radyo/pil uyandırmalarını azaltır.
+    private func activeKinds(for policy: [String: Any]) -> [String] {
+        var active: [String] = ["heatEntry"] // Durum gösterimi (Evde/Dışarıda) için ana referans
+        if policy["heating"] as? Bool ?? true {
+            active.append("heatExit")
+        }
+        if let entryLights = policy["entryLightIds"] as? [String], !entryLights.isEmpty {
+            active.append("lightEntry")
+        }
+        if let exitLights = policy["lightIds"] as? [String], !exitLights.isEmpty {
+            active.append("lightExit")
+        }
+        return active
+    }
+
     private func monitoringDiagnostics() -> [String: Any] {
         let d = UserDefaults.standard
         var value: [String: Any] = [
@@ -101,12 +129,15 @@ import FirebaseAuth
         value["lastResult"] = d.string(forKey: resultKey)
         return value
     }
+
     private func diagnosticsChanged() {
         methodChannel?.invokeMethod("onDiagnosticsChanged", arguments: nil)
     }
+
     private func validIds(_ value: Any?) -> [String] {
         Array(Set((value as? [String] ?? []).filter { $0.range(of: "^lamp[1-8]$", options: .regularExpression) != nil })).sorted()
     }
+
     private func configureActions(_ args: [String: Any]) {
         let defaults = UserDefaults.standard
         let owner = args["ownerUid"] as? String ?? ""
@@ -123,7 +154,6 @@ import FirebaseAuth
             let radius = args[kind] as? Double ?? 200
             policy[kind] = radius.isFinite ? max(50, min(2000, radius)) : 200
         }
-        // Keep exit outside entry, including malformed/legacy saved policies.
         policy["heatExit"] = max(policy["heatEntry"] as! Double, policy["heatExit"] as! Double)
         policy["lightExit"] = max(policy["lightEntry"] as! Double, policy["lightExit"] as! Double)
         let previous = defaults.dictionary(forKey: policyKey) ?? [:]
@@ -144,6 +174,7 @@ import FirebaseAuth
             }
         }
     }
+
     @discardableResult
     private func startMonitoring(latitude: Double, longitude: Double, fallback: Double) -> Bool {
         let defaults = UserDefaults.standard
@@ -155,7 +186,16 @@ import FirebaseAuth
         for old in locationManager.monitoredRegions where old.identifier == legacyRegion {
             locationManager.stopMonitoring(for: old)
         }
-        for kind in kinds {
+        let neededKinds = activeKinds(for: policy)
+        // Aktif olmayan bölgelerin izlemesini kaldır (Pil optimizasyonu)
+        for kind in kinds where !neededKinds.contains(kind) {
+            let id = prefix + kind
+            if let old = locationManager.monitoredRegions.first(where: { $0.identifier == id }) {
+                locationManager.stopMonitoring(for: old)
+            }
+            defaults.removeObject(forKey: id + "_inside")
+        }
+        for kind in neededKinds {
             let id = prefix + kind
             let requested = policy[kind] as? Double ?? max(50, fallback)
             let radius = min(max(50, requested), locationManager.maximumRegionMonitoringDistance)
@@ -168,7 +208,7 @@ import FirebaseAuth
             }
             defaults.removeObject(forKey: id + "_inside")
             let region = CLCircularRegion(center: center, radius: radius, identifier: id)
-            region.notifyOnEntry = true; region.notifyOnExit = true // Opposite edge re-arms this region.
+            region.notifyOnEntry = true; region.notifyOnExit = true
             locationManager.requestAlwaysAuthorization()
             locationManager.startMonitoring(for: region)
             locationManager.requestState(for: region)
@@ -177,30 +217,36 @@ import FirebaseAuth
         defaults.set(fallback, forKey: "geofence_radius"); defaults.set(true, forKey: "geofence_enabled")
         return true
     }
+
     private func stopMonitoring() {
         for region in locationManager.monitoredRegions where region.identifier == legacyRegion || region.identifier.hasPrefix(prefix) {
             locationManager.stopMonitoring(for: region)
         }
         UserDefaults.standard.set(false, forKey: "geofence_enabled"); cancelAllTasks()
     }
+
     private func restoreGeofenceIfNeeded() {
         let d = UserDefaults.standard
         guard d.bool(forKey: "geofence_enabled") else { return }
         _ = startMonitoring(latitude:d.double(forKey:"geofence_lat"), longitude:d.double(forKey:"geofence_lng"),
                             fallback:max(50,d.double(forKey:"geofence_radius")))
     }
+
     func locationManager(_ manager: CLLocationManager, didDetermineState state: CLRegionState, for region: CLRegion) {
         guard region.identifier.hasPrefix(prefix), state != .unknown else { return }
-        // First baseline / app reopen / radius change never sends a command.
         UserDefaults.standard.set(state == .inside, forKey: region.identifier + "_inside")
         if region.identifier == prefix + "heatEntry" {
             UserDefaults.standard.set(state == .inside, forKey:"isInsideGeofence")
             methodChannel?.invokeMethod("onStateChanged", arguments:["state":state == .inside ? "inside":"outside"])
         }
     }
+
     func locationManager(_ manager: CLLocationManager, didEnterRegion region: CLRegion) { crossing(region, entering:true) }
     func locationManager(_ manager: CLLocationManager, didExitRegion region: CLRegion) { crossing(region, entering:false) }
+
     private func crossing(_ region: CLRegion, entering: Bool) {
+        // Ev Wi-Fi ağında ESP32'ye bağlıyken GPS sapmasıyla sahte çıkış tetiklenmesini engelle
+        if !entering && lanHomeLock { return }
         let d = UserDefaults.standard
         guard region.identifier.hasPrefix(prefix), d.bool(forKey:"geofence_enabled"),
               let policy=d.dictionary(forKey:policyKey), policy["enabled"] as? Bool == true else { return }
@@ -221,6 +267,7 @@ import FirebaseAuth
         diagnosticsChanged()
         runActions(kind:kind, entering:entering, policy:policy)
     }
+
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {}
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) { publishResult("Konum hizmeti kullanılamıyor; yeni otomasyon doğrulanamadı.") }
     func locationManager(_ manager: CLLocationManager, monitoringDidFailFor region: CLRegion?, withError error: Error) {
@@ -232,16 +279,19 @@ import FirebaseAuth
     func locationManager(_ manager: CLLocationManager, didStartMonitoringFor region: CLRegion) {
         diagnosticsChanged()
     }
+
     private func finish(_ key: String) {
         tasks[key]=nil; tickets[key]=nil
         if let id=backgrounds.removeValue(forKey:key), id != .invalid { UIApplication.shared.endBackgroundTask(id) }
     }
+
     private func cancelAllTasks() {
         generation += 1; tickets.removeAll()
         for task in tasks.values { task.cancel() }; tasks.removeAll()
         for id in backgrounds.values where id != .invalid { UIApplication.shared.endBackgroundTask(id) }
         backgrounds.removeAll()
     }
+
     private func runActions(kind: String, entering: Bool, policy: [String:Any]) {
         guard let owner=policy["ownerUid"] as? String, !owner.isEmpty, tasks[kind] == nil else { return }
         let heating=kind.hasPrefix("heat") && (policy[entering ? "entryHeating":"heating"] as? Bool ?? true)
@@ -260,16 +310,15 @@ import FirebaseAuth
             do {
                 try await self.ensureOwner(owner)
                 if heating {
-                    // Controller alone arbitrates automations vs Manual. Never overwrite mode here.
                     let now=Int64(Date().timeIntervalSince1970 * 1000)
                     var request:[String:Any]=["id":UUID().uuidString,"mode":entering ? "on":"off",
                         "issuedAt":[".sv":"timestamp"],"requestedAt":now,"ttlMs":60000,
                         "source":entering ? "geofence_entry":"geofence_exit","handled":false]
-                    if entering { request["targetTemperature"]=25.0 } // Preserve V9.1 arrival target.
+                    if entering { request["targetTemperature"]=25.0 }
                     _ = try await self.firebaseRequest(owner:owner,path:"devices/device1/control/automation",method:"PUT",body:request)
                     try Task.checkCancellation()
                     if self.generation == revision { self.publishResult(entering
-                        ? "Eve dönüş: 25 °C ısıtma talebi gönderildi. Manuel modda ESP32 talebi uygulamaz."
+                        ? "Eve dönüş: ısıtma açma talebi gönderildi."
                         : "Evden çıkış: kapatma talebi gönderildi; cihaz onayını ana ekrandan izle.") }
                 } else {
                     let count=try await self.sendLightCommands(owner:owner,ids:lights,
@@ -285,6 +334,7 @@ import FirebaseAuth
             }
         }
     }
+
     private func ensureOwner(_ expected: String) async throws {
         try Task.checkCancellation()
         guard !WidgetSnapshotStore.explicitlySignedOut else { throw ThermostatCommandError.signInRequired }
@@ -293,6 +343,7 @@ import FirebaseAuth
         let app=try ThermostatFirebaseConfig.configuredFirebaseApp()
         guard Auth.auth(app:app).currentUser?.uid == expected else { throw ThermostatCommandError.signInRequired }
     }
+
     private func sendLightCommands(owner:String,ids:[String],expectedIPs:[String:String],on:Bool) async throws -> Int {
         let data=try await firebaseRequest(owner:owner,path:"wizHomes/\(owner)/config/lights",method:"GET")
         let raw=try JSONSerialization.jsonObject(with:data,options:[.fragmentsAllowed])
@@ -309,6 +360,7 @@ import FirebaseAuth
         _ = try await firebaseRequest(owner:owner,path:"",method:"PATCH",body:updates)
         return valid.count
     }
+
     private func firebaseRequest(owner:String,path:String,method:String,body:[String:Any]?=nil) async throws -> Data {
         let auth=FirebaseAuthSessionProvider(), databaseURL=try ThermostatFirebaseConfig.databaseURL()
         let bytes=try body.map { try JSONSerialization.data(withJSONObject:$0) }
@@ -332,6 +384,7 @@ import FirebaseAuth
         }
         throw ThermostatCommandError.authorizationDenied
     }
+
     private func publishResult(_ message:String) {
         UserDefaults.standard.set(message,forKey:resultKey)
         UserDefaults.standard.set(Int64(Date().timeIntervalSince1970 * 1000), forKey: "geofence_last_result_at")

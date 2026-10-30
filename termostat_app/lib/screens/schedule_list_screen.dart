@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/schedule_provider.dart';
-import '../widgets/schedule_card.dart';
+import '../providers/settings_provider.dart';
+import '../providers/weather_provider.dart';
 import '../models/schedule.dart';
 import 'package:table_calendar/table_calendar.dart';
 import 'package:intl/intl.dart';
@@ -15,7 +16,6 @@ class ScheduleListScreen extends StatefulWidget {
 }
 
 class _ScheduleListScreenState extends State<ScheduleListScreen> {
-  // State variables for the calendar
   CalendarFormat _calendarFormat = CalendarFormat.month;
   DateTime _focusedDay = DateTime.now();
   DateTime? _selectedDay;
@@ -23,10 +23,9 @@ class _ScheduleListScreenState extends State<ScheduleListScreen> {
   @override
   void initState() {
     super.initState();
-    _selectedDay = _focusedDay; // Initialize selectedDay
+    _selectedDay = _focusedDay;
   }
 
-  // Method to handle editing a schedule entry
   Future<void> _editScheduleEntry(
       String scheduleId, ScheduleEntry entry) async {
     final formKey = GlobalKey<FormState>();
@@ -34,14 +33,14 @@ class _ScheduleListScreenState extends State<ScheduleListScreen> {
     TimeOfDay startTime = entry.startTime;
     TimeOfDay endTime = entry.endTime;
     double targetTemperature = entry.targetTemperature;
-    String selectedMode =
-        entry.mode ?? 'heat'; // Initialize with entry.mode, default to 'heat'
+    String selectedMode = entry.mode.isNotEmpty ? entry.mode : 'heating_on';
+    bool optimumStart = entry.optimumStart;
 
     return showDialog(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setState) => AlertDialog(
-          title: const Text('Edit Schedule Entry'),
+          title: const Text('Zamanlamayı Düzenle'),
           content: Form(
             key: formKey,
             child: SingleChildScrollView(
@@ -51,7 +50,7 @@ class _ScheduleListScreenState extends State<ScheduleListScreen> {
                   DropdownButtonFormField<int>(
                     value: selectedDay,
                     decoration: const InputDecoration(
-                      labelText: 'Day of Week',
+                      labelText: 'Gün',
                     ),
                     items: List.generate(7, (index) {
                       return DropdownMenuItem(
@@ -65,10 +64,14 @@ class _ScheduleListScreenState extends State<ScheduleListScreen> {
                       }
                     },
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 12),
                   ListTile(
-                    title: const Text('Start Time'),
-                    trailing: Text(_formatTimeOfDay(startTime)),
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Başlangıç Saati'),
+                    trailing: Text(
+                      _formatTimeOfDay(startTime),
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
                     onTap: () async {
                       final time = await showTimePicker(
                         context: context,
@@ -80,8 +83,12 @@ class _ScheduleListScreenState extends State<ScheduleListScreen> {
                     },
                   ),
                   ListTile(
-                    title: const Text('End Time'),
-                    trailing: Text(_formatTimeOfDay(endTime)),
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Bitiş Saati'),
+                    trailing: Text(
+                      _formatTimeOfDay(endTime),
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
                     onTap: () async {
                       final time = await showTimePicker(
                         context: context,
@@ -92,43 +99,42 @@ class _ScheduleListScreenState extends State<ScheduleListScreen> {
                       }
                     },
                   ),
-                  const SizedBox(height: 16),
-                  // Only show temperature input if the mode is heating_on
+                  const SizedBox(height: 8),
                   if (selectedMode == 'heating_on')
                     TextFormField(
                       initialValue: targetTemperature.toString(),
                       decoration: const InputDecoration(
-                        labelText: 'Target Temperature',
+                        labelText: 'Hedef Sıcaklık',
                         suffixText: '°C',
                       ),
                       keyboardType: TextInputType.number,
                       validator: (value) {
                         if (value == null || value.isEmpty) {
-                          return 'Please enter a temperature';
+                          return 'Lütfen bir sıcaklık girin';
                         }
                         final temp = double.tryParse(value);
-                        if (temp == null || temp < 5 || temp > 35) {
-                          return 'Temperature must be between 5°C and 35°C';
+                        if (temp == null || temp < 10 || temp > 30) {
+                          return 'Sıcaklık 10°C ile 30°C arasında olmalı';
                         }
                         return null;
                       },
                       onChanged: (value) {
-                        targetTemperature = double.tryParse(value) ?? 20.0;
+                        targetTemperature = double.tryParse(value) ?? 21.0;
                       },
                     ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 12),
                   DropdownButtonFormField<String>(
                     value: selectedMode,
                     decoration: const InputDecoration(
-                      labelText: 'Mode',
+                      labelText: 'Kombi Modu',
                     ),
                     items: const [
                       DropdownMenuItem(
-                          value: 'heating_on', child: Text('Heating on')),
+                          value: 'heating_on', child: Text('Kombi Açık (Isıtma)')),
                       DropdownMenuItem(
-                          value: 'heating_off', child: Text('Heating off')),
+                          value: 'heating_off', child: Text('Kombi Kapalı')),
                       DropdownMenuItem(
-                          value: 'manual', child: Text('Manual control')),
+                          value: 'manual', child: Text('Manuel Kontrol')),
                     ],
                     onChanged: (value) {
                       if (value != null) {
@@ -136,6 +142,26 @@ class _ScheduleListScreenState extends State<ScheduleListScreen> {
                       }
                     },
                   ),
+                  if (selectedMode == 'heating_on') ...[
+                    const SizedBox(height: 12),
+                    SwitchListTile.adaptive(
+                      contentPadding: EdgeInsets.zero,
+                      secondary: const Icon(
+                        Icons.ac_unit_rounded,
+                        color: Colors.lightBlue,
+                      ),
+                      title: const Text(
+                        'Soğuk Havada Erken Başlat',
+                        style: TextStyle(fontSize: 14),
+                      ),
+                      subtitle: const Text(
+                        'Dış hava ≤ 5°C ise kombiyi 25 dk erken açar',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                      value: optimumStart,
+                      onChanged: (val) => setState(() => optimumStart = val),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -143,21 +169,20 @@ class _ScheduleListScreenState extends State<ScheduleListScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
+              child: const Text('İptal'),
             ),
             ElevatedButton(
               onPressed: () {
                 if (formKey.currentState!.validate()) {
-                  // Add validation to check if start and end times are the same
                   if (startTime.hour == endTime.hour &&
                       startTime.minute == endTime.minute) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
                         content:
-                            Text('Start time and end time cannot be the same.'),
+                            Text('Başlangıç ve bitiş saati aynı olamaz.'),
                       ),
                     );
-                    return; // Prevent saving if times are the same
+                    return;
                   }
 
                   final updatedEntry = entry.copyWith(
@@ -166,7 +191,8 @@ class _ScheduleListScreenState extends State<ScheduleListScreen> {
                     endTime: endTime,
                     targetTemperature: targetTemperature,
                     mode: selectedMode,
-                    scheduleId: scheduleId, // Ensure scheduleId is kept
+                    scheduleId: scheduleId,
+                    optimumStart: optimumStart,
                   );
 
                   Provider.of<ScheduleProvider>(context, listen: false)
@@ -175,7 +201,7 @@ class _ScheduleListScreenState extends State<ScheduleListScreen> {
                   Navigator.pop(context);
                 }
               },
-              child: const Text('Save'),
+              child: const Text('Kaydet'),
             ),
           ],
         ),
@@ -183,41 +209,31 @@ class _ScheduleListScreenState extends State<ScheduleListScreen> {
     );
   }
 
-  // Method to show delete confirmation dialog
   Future<void> _showDeleteConfirmation(BuildContext context, String scheduleId,
       ScheduleEntry entry, DateTime selectedDay) async {
-    // Determine the confirmation message based on repeat type
     String confirmationMessage;
     if (entry.repeat == 'once') {
       confirmationMessage =
-          'Are you sure you want to delete this one-time entry for ${_getDayName(entry.dayOfWeek)} '
-          'from ${_formatTimeOfDay(entry.startTime)} to ${_formatTimeOfDay(entry.endTime)}?';
+          '${_getDayName(entry.dayOfWeek)} günü ${_formatTimeOfDay(entry.startTime)} - ${_formatTimeOfDay(entry.endTime)} arasındaki tek seferlik zamanlamayı silmek istediğinize emin misiniz?';
     } else {
-      // For 'weekly' and 'daily', deletion for all days removes the recurring entry entirely
       confirmationMessage =
-          'Are you sure you want to delete this recurring entry '
-          '(${entry.repeat}) for ${_getDayName(entry.dayOfWeek)}s '
-          'from ${_formatTimeOfDay(entry.startTime)} to ${_formatTimeOfDay(entry.endTime)}? '
-          'This will remove it for all repeating days.';
+          '${_getDayName(entry.dayOfWeek)} günü ${_formatTimeOfDay(entry.startTime)} - ${_formatTimeOfDay(entry.endTime)} arasındaki tekrarlayan zamanlamayı nasıl silmek istersiniz?';
     }
 
     return showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Delete Entry'),
-        content: Text(confirmationMessage), // Use the dynamic message
+        title: const Text('Zamanlamayı Sil'),
+        content: Text(confirmationMessage),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+            child: const Text('Vazgeç'),
           ),
-          // Option to delete for this day only (for recurring entries) or the single entry (for once)
-          if (entry.repeat !=
-              'once') // Only show 'Delete for this day' for recurring entries
+          if (entry.repeat != 'once')
             TextButton(
               onPressed: () {
-                if (!mounted) return; // Check if the widget is still mounted
-                // Add selected day to excluded dates and update the entry
+                if (!mounted) return;
                 final dateToExclude =
                     '${selectedDay.year}-${selectedDay.month.toString().padLeft(2, '0')}-${selectedDay.day.toString().padLeft(2, '0')}';
                 final updatedExcludedDates =
@@ -226,43 +242,38 @@ class _ScheduleListScreenState extends State<ScheduleListScreen> {
                     entry.copyWith(excludedDates: updatedExcludedDates);
                 Provider.of<ScheduleProvider>(context, listen: false)
                     .updateEntryInSchedule(scheduleId, updatedEntry);
-                Navigator.pop(context); // Close the dialog
+                Navigator.pop(context);
               },
-              child: const Text('Delete for this day'),
+              child: const Text('Sadece Bugün İçin Sil'),
             ),
-          // Option to delete for all days (or the single entry for once)
           ElevatedButton(
             onPressed: () {
-              if (!mounted) return; // Check if the widget is still mounted
-              // Call the provider to remove the entry completely
+              if (!mounted) return;
               Provider.of<ScheduleProvider>(context, listen: false)
                   .removeEntryFromSchedule(scheduleId, entry.id);
-              Navigator.pop(context); // Close the dialog
+              Navigator.pop(context);
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.red,
               foregroundColor: Colors.white,
             ),
-            child:
-                const Text('Delete All'), // Button to delete the entire entry
+            child: const Text('Tümünü Sil'),
           ),
         ],
       ),
     );
   }
 
-  // Method to get a list of schedule entries for a given day
   List<ScheduleEntry> _getEntriesForDay(DateTime day) {
     final scheduleProvider =
         Provider.of<ScheduleProvider>(context, listen: false);
     final entries = <ScheduleEntry>[];
     final normalizedDay = DateTime(day.year, day.month, day.day);
     final formattedDay =
-        '${normalizedDay.year}-${normalizedDay.month.toString().padLeft(2, '0')}-${normalizedDay.day.toString().padLeft(2, '0')}'; // Format for exclusion check
+        '${normalizedDay.year}-${normalizedDay.month.toString().padLeft(2, '0')}-${normalizedDay.day.toString().padLeft(2, '0')}';
 
-    for (var schedule in scheduleProvider.schedules) {
-      for (var entry in schedule.entries) {
-        // Include entries that match the day of the week, repeat daily, or match the specific date for 'once' entries
+    for (final schedule in scheduleProvider.schedules) {
+      for (final entry in schedule.entries) {
         final isRecurringEntryForDay = (entry.repeat == 'daily' ||
                 (entry.repeat == 'weekly' &&
                     entry.dayOfWeek == normalizedDay.weekday)) &&
@@ -274,13 +285,11 @@ class _ScheduleListScreenState extends State<ScheduleListScreen> {
         }
       }
     }
-    // Sort entries by start time
     entries.sort((a, b) => _timeOfDayToDateTime(a.startTime)
         .compareTo(_timeOfDayToDateTime(b.startTime)));
     return entries;
   }
 
-  // Helper to convert TimeOfDay to DateTime for sorting
   DateTime _timeOfDayToDateTime(TimeOfDay time) {
     final now = DateTime.now();
     return DateTime(now.year, now.month, now.day, time.hour, time.minute);
@@ -288,6 +297,9 @@ class _ScheduleListScreenState extends State<ScheduleListScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final outdoorTemp = context.watch<WeatherProvider>().outdoorCelsius;
+    final globalOptimum = context.watch<SettingsProvider>().optimumStartEnabled;
+
     final body = Consumer<ScheduleProvider>(
       builder: (context, scheduleProvider, _) {
         if (scheduleProvider.isLoading) {
@@ -295,24 +307,15 @@ class _ScheduleListScreenState extends State<ScheduleListScreen> {
         }
 
         if (scheduleProvider.error != null) {
-          return Center(child: Text('Error: ${scheduleProvider.error}'));
+          return Center(child: Text('Hata: ${scheduleProvider.error}'));
         }
 
-        if (scheduleProvider.schedules.isEmpty) {
-          return const Center(
-            child:
-                Text('No schedules available. Tap the + button to create one.'),
-          );
-        }
-
-        // Get entries for the selected day
-        final entriesForSelectedDay = _getEntriesForDay(_selectedDay!);
+        final entriesForSelectedDay =
+            _getEntriesForDay(_selectedDay ?? DateTime.now());
 
         return Column(
           children: [
-            // TableCalendar Widget
             TableCalendar(
-              // The main pager owns horizontal drags. Month arrows still work.
               availableGestures: widget.embedded
                   ? AvailableGestures.verticalSwipe
                   : AvailableGestures.all,
@@ -332,14 +335,12 @@ class _ScheduleListScreenState extends State<ScheduleListScreen> {
                 }
               },
               onFormatChanged: (format) {
-                // Manually determine the next format based on the current format
                 final nextFormat = _calendarFormat == CalendarFormat.month
                     ? CalendarFormat.twoWeeks
                     : _calendarFormat == CalendarFormat.twoWeeks
                         ? CalendarFormat.week
                         : CalendarFormat.month;
 
-                // Update the state with the determined next format
                 if (_calendarFormat != nextFormat) {
                   setState(() {
                     _calendarFormat = nextFormat;
@@ -349,13 +350,11 @@ class _ScheduleListScreenState extends State<ScheduleListScreen> {
               onPageChanged: (focusedDay) {
                 _focusedDay = focusedDay;
               },
-              // Implement eventLoader to show events on days with schedules
               eventLoader: (day) {
-                // Determine if the given day has any relevant schedule entries
                 final formattedDay =
-                    '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}'; // Format for comparison
+                    '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
 
-                bool hasRelevantEntry =
+                final hasRelevantEntry =
                     scheduleProvider.schedules.any((schedule) {
                   return schedule.entries.any((entry) {
                     final isRecurringEntryForDay = (entry.repeat == 'daily' ||
@@ -369,47 +368,64 @@ class _ScheduleListScreenState extends State<ScheduleListScreen> {
                   });
                 });
 
-                // Return a dummy event list if there are relevant entries to show a dot
                 return hasRelevantEntry ? ['event'] : [];
               },
               headerStyle: const HeaderStyle(formatButtonShowsNext: false),
             ),
             const SizedBox(height: 8.0),
-            // Show selected date title
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16.0),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  'Schedule for ${DateFormat('EEE, MMM d').format(_selectedDay ?? DateTime.now())}',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    '${DateFormat('d MMM EEEE').format(_selectedDay ?? DateTime.now())} Programı',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                  ),
+                  if (globalOptimum)
+                    const Tooltip(
+                      message: 'Genel Soğuk Hava Erken Başlatma Aktif',
+                      child: Icon(
+                        Icons.ac_unit_rounded,
+                        size: 18,
+                        color: Colors.lightBlue,
+                      ),
+                    ),
+                ],
               ),
             ),
             const SizedBox(height: 8.0),
-            // Display entries for the selected day
             Expanded(
               child: entriesForSelectedDay.isEmpty
-                  ? const Center(child: Text('No schedules for this day.'))
+                  ? const Center(
+                      child: Text(
+                        'Bu gün için zamanlama yok. Sağ alttaki + ile ekleyebilirsin.',
+                      ),
+                    )
                   : ListView.builder(
                       padding: const EdgeInsets.all(16.0),
                       itemCount: entriesForSelectedDay.length,
                       itemBuilder: (context, index) {
                         final entry = entriesForSelectedDay[index];
-                        // Determine if this entry is the currently active one
                         final activeEntry =
-                            scheduleProvider.findActiveScheduleEntry();
+                            scheduleProvider.findActiveScheduleEntry(
+                          outdoorTempCelsius: outdoorTemp,
+                          globalOptimumStart: globalOptimum,
+                        );
                         final isEntryActive =
                             activeEntry != null && activeEntry.id == entry.id;
+                        final hasOptimum =
+                            (entry.optimumStart || globalOptimum) &&
+                            entry.mode == 'heating_on';
 
-                        // Display entry details as ListTile
                         return Card(
                           margin: const EdgeInsets.only(bottom: 8.0),
                           child: ListTile(
                             leading: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                // LED indicator
                                 Container(
                                   width: 10,
                                   height: 10,
@@ -420,45 +436,45 @@ class _ScheduleListScreenState extends State<ScheduleListScreen> {
                                         : Colors.grey,
                                   ),
                                 ),
-                                const SizedBox(
-                                    width:
-                                        8), // Spacing between LED and CircleAvatar
+                                const SizedBox(width: 8),
                                 CircleAvatar(
-                                    child:
-                                        Text(_getDayInitial(entry.dayOfWeek))),
+                                  child: Text(_getDayInitial(entry.dayOfWeek)),
+                                ),
                               ],
                             ),
                             title: Text(
-                                '${_formatTimeOfDay(entry.startTime)} - ${_formatTimeOfDay(entry.endTime)}'),
-                            subtitle: Text((entry.mode == 'heating_on'
-                                    ? 'Heating on'
-                                    : entry.mode == 'heating_off'
-                                        ? 'Heating off'
-                                        : 'Manual control') +
-                                (entry.mode == 'heating_on'
-                                    ? ' at ${entry.targetTemperature}°'
-                                    : '') +
-                                (entry.repeat == 'weekly'
-                                    ? ' (Weekly)'
-                                    : entry.repeat == 'daily'
-                                        ? ' (Daily)'
-                                        : ' (Once)')),
+                              '${_formatTimeOfDay(entry.startTime)} - ${_formatTimeOfDay(entry.endTime)}',
+                              style:
+                                  const TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            subtitle: Text(
+                              (entry.mode == 'heating_on'
+                                      ? 'Kombi Açık (${entry.targetTemperature}°C)'
+                                      : entry.mode == 'heating_off'
+                                          ? 'Kombi Kapalı'
+                                          : 'Manuel Kontrol') +
+                                  (entry.repeat == 'weekly'
+                                      ? ' · Haftalık'
+                                      : entry.repeat == 'daily'
+                                          ? ' · Her Gün'
+                                          : ' · Tek Seferlik') +
+                                  (hasOptimum ? '\n❄️ Soğuk Havada 25 dk Erken Başlatma' : ''),
+                            ),
+                            isThreeLine: hasOptimum,
                             trailing: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 IconButton(
                                   icon: const Icon(Icons.edit),
-                                  tooltip: 'Edit Entry',
+                                  tooltip: 'Düzenle',
                                   onPressed: () {
-                                    // Pass scheduleId and entry to edit handler
                                     _editScheduleEntry(entry.scheduleId, entry);
                                   },
                                 ),
                                 IconButton(
                                   icon: const Icon(Icons.delete),
-                                  tooltip: 'Delete Entry',
+                                  tooltip: 'Sil',
                                   onPressed: () {
-                                    // Pass context, scheduleId, entry, and selectedDay to delete handler
                                     _showDeleteConfirmation(context,
                                         entry.scheduleId, entry, _selectedDay!);
                                   },
@@ -476,7 +492,7 @@ class _ScheduleListScreenState extends State<ScheduleListScreen> {
     );
     final addButton = FloatingActionButton(
       onPressed: () {
-        if (!mounted) return; // Check if the widget is still mounted
+        if (!mounted) return;
         _showAddEntryDialog(
             context, Provider.of<ScheduleProvider>(context, listen: false));
       },
@@ -496,97 +512,93 @@ class _ScheduleListScreenState extends State<ScheduleListScreen> {
     );
   }
 
-  // Helper method to get day initial (copying from ScheduleEntryScreen)
   String _getDayInitial(int day) {
     switch (day) {
       case 1:
-        return 'M';
+        return 'Pt';
       case 2:
-        return 'T';
+        return 'Sa';
       case 3:
-        return 'W';
+        return 'Ça';
       case 4:
-        return 'T';
+        return 'Pe';
       case 5:
-        return 'F';
+        return 'Cu';
       case 6:
-        return 'S';
+        return 'Ct';
       case 7:
-        return 'S';
+        return 'Pz';
       default:
         return '';
     }
   }
 
-  // Helper method to format TimeOfDay (copying from ScheduleEntryScreen)
   String _formatTimeOfDay(TimeOfDay time) {
     final hour = time.hour.toString().padLeft(2, '0');
     final minute = time.minute.toString().padLeft(2, '0');
     return '$hour:$minute';
   }
 
-  // Helper method to get day name (copying from ScheduleEntryScreen)
   String _getDayName(int day) {
     switch (day) {
       case 1:
-        return 'Monday';
+        return 'Pazartesi';
       case 2:
-        return 'Tuesday';
+        return 'Salı';
       case 3:
-        return 'Wednesday';
+        return 'Çarşamba';
       case 4:
-        return 'Thursday';
+        return 'Perşembe';
       case 5:
-        return 'Friday';
+        return 'Cuma';
       case 6:
-        return 'Saturday';
+        return 'Cumartesi';
       case 7:
-        return 'Sunday';
+        return 'Pazar';
       default:
         return '';
     }
   }
 
-  // Method to show a dialog to add a new schedule entry
   Future<void> _showAddEntryDialog(
       BuildContext context, ScheduleProvider scheduleProvider) async {
+    Schedule? targetSchedule;
     if (scheduleProvider.schedules.isEmpty) {
-      // Show a message if no schedules exist
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please create a schedule first.'),
-        ),
-      );
-      return;
+      targetSchedule = await scheduleProvider.ensureDefaultSchedule();
+      if (targetSchedule == null) return;
+    } else {
+      targetSchedule = scheduleProvider.schedules.first;
     }
 
-    // Directly show the new entry details dialog for the first schedule
-    final firstSchedule = scheduleProvider.schedules.first;
-    _showNewEntryDetailsDialog(context, scheduleProvider, firstSchedule,
-        _selectedDay ?? DateTime.now());
+    if (!context.mounted) return;
+    _showNewEntryDetailsDialog(
+      context,
+      scheduleProvider,
+      targetSchedule,
+      _selectedDay ?? DateTime.now(),
+    );
   }
 
-  // Method to show a dialog to add a new schedule entry details
   Future<void> _showNewEntryDetailsDialog(
       BuildContext context,
       ScheduleProvider scheduleProvider,
       Schedule schedule,
       DateTime initialDate) async {
     final formKey = GlobalKey<FormState>();
-    int selectedDay =
-        initialDate.weekday; // Default to the selected date's weekday
+    int selectedDay = initialDate.weekday;
     TimeOfDay startTime = TimeOfDay.now();
-    TimeOfDay endTime = TimeOfDay.now();
-    double targetTemperature = 20.0; // Default temperature
-    String selectedMode = 'heating_on'; // Default mode
-    String selectedRepeat =
-        'once'; // Define this variable at the beginning of _showNewEntryDetailsDialog
+    TimeOfDay endTime =
+        TimeOfDay(hour: (TimeOfDay.now().hour + 1) % 24, minute: TimeOfDay.now().minute);
+    double targetTemperature = 21.0;
+    String selectedMode = 'heating_on';
+    String selectedRepeat = 'once';
+    bool optimumStart = context.read<SettingsProvider>().optimumStartEnabled;
 
     return showDialog(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setState) => AlertDialog(
-          title: const Text('Add New Schedule Entry'),
+          title: const Text('Yeni Zamanlama Ekle'),
           content: Form(
             key: formKey,
             child: SingleChildScrollView(
@@ -596,7 +608,7 @@ class _ScheduleListScreenState extends State<ScheduleListScreen> {
                   DropdownButtonFormField<int>(
                     value: selectedDay,
                     decoration: const InputDecoration(
-                      labelText: 'Day of Week',
+                      labelText: 'Gün',
                     ),
                     items: List.generate(7, (index) {
                       return DropdownMenuItem(
@@ -610,10 +622,14 @@ class _ScheduleListScreenState extends State<ScheduleListScreen> {
                       }
                     },
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 12),
                   ListTile(
-                    title: const Text('Start Time'),
-                    trailing: Text(_formatTimeOfDay(startTime)),
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Başlangıç Saati'),
+                    trailing: Text(
+                      _formatTimeOfDay(startTime),
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
                     onTap: () async {
                       final time = await showTimePicker(
                         context: context,
@@ -625,8 +641,12 @@ class _ScheduleListScreenState extends State<ScheduleListScreen> {
                     },
                   ),
                   ListTile(
-                    title: const Text('End Time'),
-                    trailing: Text(_formatTimeOfDay(endTime)),
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Bitiş Saati'),
+                    trailing: Text(
+                      _formatTimeOfDay(endTime),
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
                     onTap: () async {
                       final time = await showTimePicker(
                         context: context,
@@ -637,42 +657,41 @@ class _ScheduleListScreenState extends State<ScheduleListScreen> {
                       }
                     },
                   ),
-                  const SizedBox(height: 16),
-                  // Only show temperature input if the mode is heating_on
+                  const SizedBox(height: 8),
                   if (selectedMode == 'heating_on')
                     TextFormField(
                       initialValue: targetTemperature.toString(),
                       decoration: const InputDecoration(
-                        labelText: 'Target Temperature',
+                        labelText: 'Hedef Sıcaklık',
                         suffixText: '°C',
                       ),
                       keyboardType: TextInputType.number,
                       validator: (value) {
                         if (value == null || value.isEmpty) {
-                          return 'Please enter a temperature';
+                          return 'Lütfen bir sıcaklık girin';
                         }
                         final temp = double.tryParse(value);
-                        if (temp == null || temp < 5 || temp > 35) {
-                          return 'Temperature must be between 5°C and 35°C';
+                        if (temp == null || temp < 10 || temp > 30) {
+                          return 'Sıcaklık 10°C ile 30°C arasında olmalı';
                         }
                         return null;
                       },
                       onChanged: (value) {
-                        targetTemperature = double.tryParse(value) ?? 20.0;
+                        targetTemperature = double.tryParse(value) ?? 21.0;
                       },
                     ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 12),
                   DropdownButtonFormField<String>(
                     value: selectedRepeat,
                     decoration: const InputDecoration(
-                      labelText: 'Repeat',
+                      labelText: 'Tekrar Sıklığı',
                     ),
                     items: const [
-                      DropdownMenuItem(value: 'once', child: Text('Once')),
+                      DropdownMenuItem(value: 'once', child: Text('Tek Seferlik')),
                       DropdownMenuItem(
-                          value: 'weekly', child: Text('Every Week')),
+                          value: 'weekly', child: Text('Her Hafta')),
                       DropdownMenuItem(
-                          value: 'daily', child: Text('Every Day')),
+                          value: 'daily', child: Text('Her Gün')),
                     ],
                     onChanged: (value) {
                       if (value != null) {
@@ -680,19 +699,19 @@ class _ScheduleListScreenState extends State<ScheduleListScreen> {
                       }
                     },
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 12),
                   DropdownButtonFormField<String>(
                     value: selectedMode,
                     decoration: const InputDecoration(
-                      labelText: 'Mode',
+                      labelText: 'Kombi Modu',
                     ),
                     items: const [
                       DropdownMenuItem(
-                          value: 'heating_on', child: Text('Heating on')),
+                          value: 'heating_on', child: Text('Kombi Açık (Isıtma)')),
                       DropdownMenuItem(
-                          value: 'heating_off', child: Text('Heating off')),
+                          value: 'heating_off', child: Text('Kombi Kapalı')),
                       DropdownMenuItem(
-                          value: 'manual', child: Text('Manual control')),
+                          value: 'manual', child: Text('Manuel Kontrol')),
                     ],
                     onChanged: (value) {
                       if (value != null) {
@@ -700,53 +719,69 @@ class _ScheduleListScreenState extends State<ScheduleListScreen> {
                       }
                     },
                   ),
+                  if (selectedMode == 'heating_on') ...[
+                    const SizedBox(height: 12),
+                    SwitchListTile.adaptive(
+                      contentPadding: EdgeInsets.zero,
+                      secondary: const Icon(
+                        Icons.ac_unit_rounded,
+                        color: Colors.lightBlue,
+                      ),
+                      title: const Text(
+                        'Soğuk Havada Erken Başlat',
+                        style: TextStyle(fontSize: 14),
+                      ),
+                      subtitle: const Text(
+                        'Dış hava ≤ 5°C ise kombiyi 25 dk erken açar',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                      value: optimumStart,
+                      onChanged: (val) => setState(() => optimumStart = val),
+                    ),
+                  ],
                 ],
               ),
             ),
           ),
           actions: [
             TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Cancel')),
+              onPressed: () => Navigator.pop(context),
+              child: const Text('İptal'),
+            ),
             ElevatedButton(
               onPressed: () {
                 if (formKey.currentState!.validate()) {
-                  // Add validation to check if start and end times are the same
                   if (startTime.hour == endTime.hour &&
                       startTime.minute == endTime.minute) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
                         content:
-                            Text('Start time and end time cannot be the same.'),
+                            Text('Başlangıç ve bitiş saati aynı olamaz.'),
                       ),
                     );
-                    return; // Prevent saving if times are the same
+                    return;
                   }
 
-                  // Create a new ScheduleEntry object
                   final newEntry = ScheduleEntry(
-                    id: DateTime.now()
-                        .millisecondsSinceEpoch
-                        .toString(), // Simple unique ID
+                    id: DateTime.now().millisecondsSinceEpoch.toString(),
                     dayOfWeek: selectedDay,
                     startTime: startTime,
                     endTime: endTime,
                     targetTemperature: targetTemperature,
                     mode: selectedMode,
-                    repeat: selectedRepeat, // Include the selected repetition
-                    scheduleId: schedule.id, // Assign to the selected schedule
+                    repeat: selectedRepeat,
+                    scheduleId: schedule.id,
                     specificDate: selectedRepeat == 'once'
-                        ? _selectedDay?.toShortString()
-                        : null, // Set specificDate for 'once' entries
+                        ? (_selectedDay ?? DateTime.now()).toShortString()
+                        : null,
+                    optimumStart: optimumStart,
                   );
 
-                  // Add the new entry to the selected schedule using the provider
                   scheduleProvider.addEntryToSchedule(schedule.id, newEntry);
-
-                  Navigator.pop(context); // Close the dialog
+                  Navigator.pop(context);
                 }
               },
-              child: const Text('Save'),
+              child: const Text('Kaydet'),
             ),
           ],
         ),
@@ -757,6 +792,6 @@ class _ScheduleListScreenState extends State<ScheduleListScreen> {
 
 extension on DateTime {
   String toShortString() {
-    return '${year}-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')}';
+    return '$year-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')}';
   }
 }

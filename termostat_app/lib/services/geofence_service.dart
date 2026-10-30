@@ -23,6 +23,7 @@ class ThermostatGeofenceService extends ChangeNotifier
   bool _isStarted = false;
   bool _isInitialized = false;
   bool _isInsideGeofence = true;
+  bool _lanHomeLock = false;
   GeofenceDiagnostics? _diagnostics;
   Timer? _sampleExpiry;
   bool _observingLifecycle = false;
@@ -44,8 +45,9 @@ class ThermostatGeofenceService extends ChangeNotifier
       await settings.ready;
       if (!await Geolocator.isLocationServiceEnabled()) return;
       var permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied)
+      if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
+      }
       if (permission == LocationPermission.denied ||
           permission == LocationPermission.deniedForever) {
         await refreshDiagnostics();
@@ -75,6 +77,21 @@ class ThermostatGeofenceService extends ChangeNotifier
     } catch (_) {
       debugPrint('Konum otomasyonu başlatılamadı.');
     }
+  }
+
+  /// Ev Wi-Fi ağında ESP32'ye doğrudan ulaşıldığında iOS tarafına
+  /// evde olduğumuzu bildirerek GPS sapmalarından kaynaklı sahte çıkışları engeller.
+  Future<void> setLanHomeLock(bool onHomeLan) async {
+    if (!_supported || _lanHomeLock == onHomeLan) return;
+    _lanHomeLock = onHomeLan;
+    if (onHomeLan) {
+      _isInsideGeofence = true;
+      await _saveState(true);
+    }
+    try {
+      await _channel.invokeMethod('setLanHomeLock', {'onHomeLan': onHomeLan});
+    } catch (_) {}
+    notifyListeners();
   }
 
   Future<bool> syncExitActions() => _syncNativePolicy();
@@ -110,8 +127,9 @@ class ThermostatGeofenceService extends ChangeNotifier
 
   Future<void> start(BuildContext context) async {
     if (!_isInitialized || _isStarted) return;
-    if (context.mounted)
+    if (context.mounted) {
       _settingsProvider = Provider.of<SettingsProvider>(context, listen: false);
+    }
     if (!await _syncNativePolicy()) return;
     final settings = _settingsProvider;
     if (settings == null ||
@@ -186,8 +204,9 @@ class ThermostatGeofenceService extends ChangeNotifier
           raw,
           now: DateTime.now().millisecondsSinceEpoch,
         );
-        if (_diagnostics!.inside != null)
+        if (_diagnostics!.inside != null) {
           _isInsideGeofence = _diagnostics!.inside!;
+        }
         _lastAutomationMessage =
             raw['lastResult'] is String ? raw['lastResult'] as String : null;
         final sampledAt = _diagnostics!.sampledAt;
@@ -197,13 +216,14 @@ class ThermostatGeofenceService extends ChangeNotifier
           final remaining = sampledAt.millisecondsSinceEpoch +
               300001 -
               DateTime.now().millisecondsSinceEpoch;
-          if (remaining > 0)
+          if (remaining > 0) {
             _sampleExpiry =
                 Timer(Duration(milliseconds: remaining), notifyListeners);
+          }
         }
       }
     } catch (_) {
-      _diagnostics = null; // Never show cached zero as a verified location.
+      _diagnostics = null;
     }
     notifyListeners();
   }
@@ -215,8 +235,9 @@ class ThermostatGeofenceService extends ChangeNotifier
 
   Future<void> updateGeofence(BuildContext context) async {
     if (!_isInitialized || !_isStarted) return;
-    if (context.mounted)
+    if (context.mounted) {
       _settingsProvider = Provider.of<SettingsProvider>(context, listen: false);
+    }
     if (!await _syncNativePolicy()) return;
     final settings = _settingsProvider!;
     try {
@@ -251,6 +272,7 @@ class ThermostatGeofenceService extends ChangeNotifier
   bool get isRunning => _isStarted;
   bool get isInitialized => _isInitialized;
   bool get isInsideGeofence => _isInsideGeofence;
+  bool get isLanHomeLocked => _lanHomeLock;
   double? get lastDistance {
     final sample = _diagnostics?.sampledAt;
     if (sample == null) return null;
@@ -267,6 +289,7 @@ class ThermostatGeofenceService extends ChangeNotifier
     _authSubscription = null;
     _isInitialized = false;
     _isInsideGeofence = true;
+    _lanHomeLock = false;
     _diagnostics = null;
     _lastAutomationMessage = null;
     _sampleExpiry?.cancel();

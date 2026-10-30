@@ -7,16 +7,19 @@ import '../providers/thermostat_provider.dart';
 import '../providers/settings_provider.dart';
 import '../providers/schedule_provider.dart';
 import '../models/schedule.dart';
+import '../models/heating_feedback.dart';
 import '../widgets/compact_dashboard.dart';
 import '../widgets/compact_weather_card.dart';
 import '../widgets/thermostat_summary.dart';
 import '../widgets/home_pager.dart';
+import '../widgets/offline_banner.dart';
 import './schedule_list_screen.dart';
 import './wiz_lights_screen.dart';
 import './thermostat_log_screen.dart';
 import '../services/geofence_service.dart';
 import '../services/deep_link_service.dart';
 import '../services/widget_service.dart';
+import '../utils/haptics_helper.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -48,7 +51,6 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _initializeData() async {
-    final settings = Provider.of<SettingsProvider>(context, listen: false);
     final thermostat = Provider.of<ThermostatProvider>(context, listen: false);
     final schedule = Provider.of<ScheduleProvider>(context, listen: false);
     await thermostat.initializeThermostat('device1');
@@ -97,6 +99,50 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  LinearGradient _buildStatusGradient(
+    BuildContext context, {
+    required bool enabled,
+    required RelayState relayState,
+    required String mode,
+  }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final baseColor = Theme.of(context).scaffoldBackgroundColor;
+
+    if (!enabled) {
+      return LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [baseColor, baseColor],
+      );
+    }
+
+    if (mode == 'on' && relayState == RelayState.on) {
+      return LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: isDark
+            ? [const Color(0xFF2C1608), const Color(0xFF1A0F0A), baseColor]
+            : [const Color(0xFFFFF3E0), const Color(0xFFFFE0B2), baseColor],
+      );
+    }
+
+    if (mode == 'on' && relayState != RelayState.on) {
+      return LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: isDark
+            ? [const Color(0xFF0A1E29), const Color(0xFF0D151A), baseColor]
+            : [const Color(0xFFE1F5FE), const Color(0xFFF0F9FF), baseColor],
+      );
+    }
+
+    return LinearGradient(
+      begin: Alignment.topCenter,
+      end: Alignment.bottomCenter,
+      colors: [baseColor, baseColor],
+    );
+  }
+
   @override
   void dispose() {
     Provider.of<ThermostatProvider>(context, listen: false).stopListening();
@@ -112,45 +158,82 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return HomePager(
-      onRooms: () => _roomKey.currentState?.openRooms(),
-      onRoomSettings: () => _roomKey.currentState?.openSettings(),
-      onAppSettings: () => Navigator.pushNamed(context, '/settings'),
-      pages: [
-        const ThermostatLogScreen(),
-        WizLightsScreen(key: _roomKey, embedded: true),
-        Consumer2<ThermostatProvider, SettingsProvider>(
-          builder: (context, thermostat, settings, _) {
-            if (thermostat.isLoading || settings.isLoading) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            if (thermostat.error != null || settings.error != null) {
-              return Center(
-                child: Text('Hata: ${thermostat.error ?? settings.error}'),
-              );
-            }
-            final data = thermostat.thermostat;
-            if (data == null) {
-              return const Center(child: Text('Bağlı termostat yok'));
-            }
-            return CompactDashboard(
-              summary: ThermostatSummary(
-                temperature: data.currentTemperature,
-                humidity: data.humidity,
-                target: data.targetTemperature,
-                onTargetChanged: thermostat.updateTemperature,
-              ),
-              mode: data.mode,
-              feedback: thermostat.heatingFeedback,
-              onModeChanged: thermostat.updateMode,
-              waking: thermostat.wakeRequestInProgress,
-              onWake: () => _requestPcWake(thermostat),
-              weather: const CompactWeatherCard(),
-            );
-          },
-        ),
-        const ScheduleListScreen(embedded: true),
-      ],
+    return Scaffold(
+      body: Column(
+        children: [
+          const OfflineBanner(),
+          Expanded(
+            child: HomePager(
+              onRooms: () => _roomKey.currentState?.openRooms(),
+              onRoomSettings: () => _roomKey.currentState?.openSettings(),
+              onAppSettings: () => Navigator.pushNamed(context, '/settings'),
+              pages: [
+                const ThermostatLogScreen(),
+                WizLightsScreen(key: _roomKey, embedded: true),
+                Consumer2<ThermostatProvider, SettingsProvider>(
+                  builder: (context, thermostat, settings, _) {
+                    if (thermostat.isLoading || settings.isLoading) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    if (thermostat.error != null || settings.error != null) {
+                      return Center(
+                        child: Text('Hata: ${thermostat.error ?? settings.error}'),
+                      );
+                    }
+                    final data = thermostat.thermostat;
+                    if (data == null) {
+                      return const Center(child: Text('Bağlı termostat yok'));
+                    }
+                    final feedback = thermostat.heatingFeedback;
+                    return AnimatedContainer(
+                      duration: const Duration(milliseconds: 900),
+                      curve: Curves.easeInOutCubic,
+                      decoration: BoxDecoration(
+                        gradient: _buildStatusGradient(
+                          context,
+                          enabled: settings.enableDynamicBackground,
+                          relayState: feedback.relay,
+                          mode: data.mode,
+                        ),
+                      ),
+                      child: CompactDashboard(
+                        summary: ThermostatSummary(
+                          temperature: data.currentTemperature,
+                          humidity: data.humidity,
+                          target: data.targetTemperature,
+                          onTargetChanged: (newTarget) {
+                            HapticsHelper.temperatureStep(
+                              enabled: settings.enableHaptics,
+                            );
+                            thermostat.updateTemperature(newTarget);
+                          },
+                        ),
+                        mode: data.mode,
+                        feedback: feedback,
+                        onModeChanged: (newMode) {
+                          HapticsHelper.modeToggle(
+                            enabled: settings.enableHaptics,
+                          );
+                          thermostat.updateMode(newMode);
+                        },
+                        waking: thermostat.wakeRequestInProgress,
+                        onWake: () {
+                          HapticsHelper.heavyAction(
+                            enabled: settings.enableHaptics,
+                          );
+                          _requestPcWake(thermostat);
+                        },
+                        weather: const CompactWeatherCard(),
+                      ),
+                    );
+                  },
+                ),
+                const ScheduleListScreen(embedded: true),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -191,172 +274,5 @@ class _HomeScreenState extends State<HomeScreen> {
         backgroundColor: sent ? null : Theme.of(context).colorScheme.error,
       ),
     );
-  }
-
-  Future<void> _showAddEntryDialog(
-    BuildContext context,
-    Schedule schedule,
-  ) async {
-    final formKey = GlobalKey<FormState>();
-    int selectedDay = 1;
-    TimeOfDay startTime = TimeOfDay.now();
-    TimeOfDay endTime = TimeOfDay.now();
-    double targetTemperature = 20.0;
-    String selectedMode = 'auto';
-
-    return showDialog(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setState) => AlertDialog(
-          title: const Text('Add Schedule Entry'),
-          content: Form(
-            key: formKey,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  DropdownButtonFormField<int>(
-                    value: selectedDay,
-                    decoration: const InputDecoration(labelText: 'Day of Week'),
-                    items: List.generate(7, (index) {
-                      return DropdownMenuItem(
-                        value: index + 1,
-                        child: Text(_getDayName(index + 1)),
-                      );
-                    }),
-                    onChanged: (value) {
-                      if (value != null) {
-                        setState(() => selectedDay = value);
-                      }
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  ListTile(
-                    title: const Text('Start Time'),
-                    trailing: Text(_formatTimeOfDay(startTime)),
-                    onTap: () async {
-                      final time = await showTimePicker(
-                        context: context,
-                        initialTime: startTime,
-                      );
-                      if (time != null) {
-                        setState(() => startTime = time);
-                      }
-                    },
-                  ),
-                  ListTile(
-                    title: const Text('End Time'),
-                    trailing: Text(_formatTimeOfDay(endTime)),
-                    onTap: () async {
-                      final time = await showTimePicker(
-                        context: context,
-                        initialTime: endTime,
-                      );
-                      if (time != null) {
-                        setState(() => endTime = time);
-                      }
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  TextFormField(
-                    initialValue: targetTemperature.toString(),
-                    decoration: const InputDecoration(
-                      labelText: 'Target Temperature',
-                      suffixText: '°C',
-                    ),
-                    keyboardType: TextInputType.number,
-                    validator: (value) {
-                      if (value == null || value.isEmpty) {
-                        return 'Please enter a temperature';
-                      }
-                      final temp = double.tryParse(value);
-                      if (temp == null || temp < 5 || temp > 35) {
-                        return 'Temperature must be between 5°C and 35°C';
-                      }
-                      return null;
-                    },
-                    onChanged: (value) {
-                      targetTemperature = double.tryParse(value) ?? 20.0;
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  DropdownButtonFormField<String>(
-                    value: selectedMode,
-                    decoration: const InputDecoration(labelText: 'Mode'),
-                    items: const [
-                      DropdownMenuItem(value: 'heat', child: Text('Heat')),
-                      DropdownMenuItem(value: 'cool', child: Text('Cool')),
-                      DropdownMenuItem(value: 'auto', child: Text('Auto')),
-                      DropdownMenuItem(value: 'off', child: Text('Off')),
-                    ],
-                    onChanged: (value) {
-                      if (value != null) {
-                        setState(() => selectedMode = value);
-                      }
-                    },
-                  ),
-                ],
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                if (formKey.currentState!.validate()) {
-                  final entry = ScheduleEntry(
-                    id: DateTime.now().millisecondsSinceEpoch.toString(),
-                    scheduleId: schedule.id,
-                    dayOfWeek: selectedDay,
-                    startTime: startTime,
-                    endTime: endTime,
-                    targetTemperature: targetTemperature,
-                    mode: selectedMode,
-                  );
-
-                  // Call the provider to add the entry
-                  Provider.of<ScheduleProvider>(
-                    context,
-                    listen: false,
-                  ).addEntryToSchedule(schedule.id, entry);
-
-                  Navigator.pop(context); // Close the dialog
-                }
-              },
-              child: const Text('Add'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  String _getDayName(int dayOfWeek) {
-    switch (dayOfWeek) {
-      case 1:
-        return 'Monday';
-      case 2:
-        return 'Tuesday';
-      case 3:
-        return 'Wednesday';
-      case 4:
-        return 'Thursday';
-      case 5:
-        return 'Friday';
-      case 6:
-        return 'Saturday';
-      case 7:
-        return 'Sunday';
-      default:
-        return '';
-    }
-  }
-
-  String _formatTimeOfDay(TimeOfDay time) {
-    final localizations = MaterialLocalizations.of(context);
-    return localizations.formatTimeOfDay(time);
   }
 }

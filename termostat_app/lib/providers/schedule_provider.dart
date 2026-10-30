@@ -33,10 +33,32 @@ class ScheduleProvider with ChangeNotifier {
         _schedules = [];
       }
     } catch (e) {
-      _error = 'Failed to load schedules: $e';
+      _error = 'Programlar yüklenemedi: $e';
     } finally {
       _isLoading = false;
       notifyListeners();
+    }
+  }
+
+  /// Eğer hiç program yoksa varsayılan bir "Ana Program" oluşturup döner.
+  Future<Schedule?> ensureDefaultSchedule() async {
+    if (_schedules.isNotEmpty) return _schedules.first;
+    try {
+      final newRef = _database.child('schedules').push();
+      final defaultSchedule = Schedule(
+        id: newRef.key!,
+        name: 'Ana Program',
+        entries: [],
+        isEnabled: true,
+      );
+      await newRef.set(defaultSchedule.toJson());
+      _schedules.add(defaultSchedule);
+      notifyListeners();
+      return defaultSchedule;
+    } catch (e) {
+      _error = 'Varsayılan program oluşturulamadı: $e';
+      notifyListeners();
+      return null;
     }
   }
 
@@ -46,11 +68,11 @@ class ScheduleProvider with ChangeNotifier {
     notifyListeners();
     try {
       final newRef = _database.child('schedules').push();
-      await newRef.set(schedule.toJson());
       final newSchedule = schedule.copyWith(id: newRef.key!);
+      await newRef.set(newSchedule.toJson());
       _schedules.add(newSchedule);
     } catch (e) {
-      _error = 'Failed to add schedule: $e';
+      _error = 'Program eklenemedi: $e';
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -70,7 +92,7 @@ class ScheduleProvider with ChangeNotifier {
         _schedules[index] = schedule;
       }
     } catch (e) {
-      _error = 'Failed to update schedule: $e';
+      _error = 'Program güncellenemedi: $e';
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -84,9 +106,9 @@ class ScheduleProvider with ChangeNotifier {
     try {
       await _database.child('schedules/$scheduleId').remove();
       _schedules.removeWhere((s) => s.id == scheduleId);
-      _error = null; // Clear error on successful deletion
+      _error = null;
     } catch (e) {
-      _error = 'Failed to delete schedule: $e';
+      _error = 'Program silinemedi: $e';
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -99,7 +121,7 @@ class ScheduleProvider with ChangeNotifier {
       final updatedSchedule = schedule.copyWith(isEnabled: enabled);
       await updateSchedule(updatedSchedule);
     } catch (e) {
-      _error = 'Failed to toggle schedule: $e';
+      _error = 'Program durumu değiştirilemedi: $e';
       notifyListeners();
     }
   }
@@ -124,10 +146,10 @@ class ScheduleProvider with ChangeNotifier {
 
         _schedules[scheduleIndex] = updatedSchedule;
       } else {
-        _error = 'Schedule not found';
+        _error = 'Program bulunamadı';
       }
     } catch (e) {
-      _error = 'Failed to add schedule entry: $e';
+      _error = 'Zamanlama eklenemedi: $e';
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -156,13 +178,13 @@ class ScheduleProvider with ChangeNotifier {
 
           _schedules[scheduleIndex] = updatedSchedule;
         } else {
-          _error = 'Entry not found';
+          _error = 'Zamanlama kaydı bulunamadı';
         }
       } else {
-        _error = 'Schedule not found';
+        _error = 'Program bulunamadı';
       }
     } catch (e) {
-      _error = 'Failed to update schedule entry: $e';
+      _error = 'Zamanlama güncellenemedi: $e';
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -190,10 +212,10 @@ class ScheduleProvider with ChangeNotifier {
 
         _schedules[scheduleIndex] = updatedSchedule;
       } else {
-        _error = 'Schedule with ID $scheduleId not found';
+        _error = 'Program bulunamadı';
       }
     } catch (e) {
-      _error = 'Failed to remove schedule entry: $e';
+      _error = 'Zamanlama silinemedi: $e';
     } finally {
       _isLoading = false;
       notifyListeners();
@@ -205,20 +227,26 @@ class ScheduleProvider with ChangeNotifier {
     notifyListeners();
   }
 
-  // Method to find the currently active schedule entry
-  ScheduleEntry? findActiveScheduleEntry() {
+  /// Aktif zamanlamayı bulur. Dış hava sıcaklığı <= 5°C ise ve kayıtta (veya genel ayarda)
+  /// Optimum Start açıksa başlangıç saatini 25 dakika öne çeker.
+  ScheduleEntry? findActiveScheduleEntry({
+    double? outdoorTempCelsius,
+    bool globalOptimumStart = false,
+  }) {
     final now = DateTime.now();
-    final currentWeekday = now.weekday; // Monday is 1, Sunday is 7
+    final currentWeekday = now.weekday;
     final currentTime = TimeOfDay.now();
+    final formattedToday =
+        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
 
     ScheduleEntry? activeEntry;
 
-    for (var schedule in _schedules) {
-      if (!schedule.isEnabled) continue; // Skip disabled schedules
+    for (final schedule in _schedules) {
+      if (!schedule.isEnabled) continue;
 
-      for (var entry in schedule.entries) {
-        // Check if the entry is enabled
+      for (final entry in schedule.entries) {
         if (!entry.isEnabled) continue;
+        if (entry.excludedDates.contains(formattedToday)) continue;
 
         bool dayMatches = false;
         if (entry.repeat == 'daily') {
@@ -227,11 +255,10 @@ class ScheduleProvider with ChangeNotifier {
             entry.dayOfWeek == currentWeekday) {
           dayMatches = true;
         } else if (entry.repeat == 'once') {
-          // For 'once' entries, check the specific date
           if (entry.specificDate != null) {
-            final specificDateTime = DateTime.parse(entry.specificDate!);
-            // Compare date part only
-            if (specificDateTime.year == now.year &&
+            final specificDateTime = DateTime.tryParse(entry.specificDate!);
+            if (specificDateTime != null &&
+                specificDateTime.year == now.year &&
                 specificDateTime.month == now.month &&
                 specificDateTime.day == now.day) {
               dayMatches = true;
@@ -240,15 +267,23 @@ class ScheduleProvider with ChangeNotifier {
         }
 
         if (dayMatches) {
-          // Check if the current time is within the entry's time range
-          final entryStartTime = _timeOfDayToDateTime(entry.startTime);
+          var entryStartTime = _timeOfDayToDateTime(entry.startTime);
           final entryEndTime = _timeOfDayToDateTime(entry.endTime);
           final currentTimeDateTime = _timeOfDayToDateTime(currentTime);
 
-          if (currentTimeDateTime.isAfter(entryStartTime) &&
+          final isColdWeather =
+              outdoorTempCelsius != null && outdoorTempCelsius <= 5.0;
+          final useOptimum =
+              (entry.optimumStart || globalOptimumStart) &&
+              (entry.mode == 'heating_on' || entry.mode == 'heat');
+
+          if (useOptimum && isColdWeather) {
+            entryStartTime =
+                entryStartTime.subtract(const Duration(minutes: 25));
+          }
+
+          if (!currentTimeDateTime.isBefore(entryStartTime) &&
               currentTimeDateTime.isBefore(entryEndTime)) {
-            // Found an active entry. If multiple entries overlap, the last one found will be considered active.
-            // This is a simple approach, could be refined to prioritize or handle overlaps differently.
             activeEntry = entry;
           }
         }
@@ -258,16 +293,13 @@ class ScheduleProvider with ChangeNotifier {
     return activeEntry;
   }
 
-  // Helper to convert TimeOfDay to DateTime for comparison (uses today's date)
   DateTime _timeOfDayToDateTime(TimeOfDay time) {
     final now = DateTime.now();
     return DateTime(now.year, now.month, now.day, time.hour, time.minute);
   }
 
-  // Method to add a timer to periodically check and apply schedule
   void startScheduleChecker(ThermostatProvider thermostatProvider) {
-    // V10: ESP32 alone executes schedules. A phone timer would bypass Manual
-    // and create competing control revisions while the app is foregrounded.
+    // V10: ESP32 alone executes schedules.
     _timer?.cancel();
   }
 
@@ -275,5 +307,5 @@ class ScheduleProvider with ChangeNotifier {
     _timer?.cancel();
   }
 
-  Timer? _timer; // Timer instance
+  Timer? _timer;
 }

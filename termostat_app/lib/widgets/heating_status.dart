@@ -61,7 +61,7 @@ class _HeatingStatusState extends State<HeatingStatus> {
                   return Center(
                     child: Padding(
                       padding: const EdgeInsets.all(16.0),
-                      child: Text('Reset kayıtları alınamadı: \${snapshot.error}'),
+                      child: Text('Reset kayıtları alınamadı: ${snapshot.error}'),
                     ),
                   );
                 }
@@ -148,20 +148,20 @@ class _HeatingStatusState extends State<HeatingStatus> {
                                 ],
                               ),
                               const SizedBox(height: 6),
-                              Text('Tarih/Saat: \${lastReset['time'] ?? '-'}'),
+                              Text('Tarih/Saat: ${lastReset['time'] ?? '-'}'),
                               Text(
-                                  'Sebep: \${lastReset['reason'] ?? 'Bilinmiyor'} (Kod: \${lastReset['reasonCode'] ?? '-'})'),
+                                  'Sebep: ${lastReset['reason'] ?? 'Bilinmiyor'} (Kod: ${lastReset['reasonCode'] ?? '-'})'),
                               Text(
-                                  'Açılış RAM (Free/Min): \${lastReset['freeHeapAtBoot'] ?? '-'} / \${lastReset['minFreeHeap'] ?? '-'} byte'),
+                                  'Açılış RAM (Free/Min): ${lastReset['freeHeapAtBoot'] ?? '-'} / ${lastReset['minFreeHeap'] ?? '-'} byte'),
                               Text(
-                                  'Kurtarma Sayacı: \${lastReset['recoveryUsed'] ?? 0}/8'),
+                                  'Kurtarma Sayacı: ${lastReset['recoveryUsed'] ?? 0}/8'),
                             ],
                           ),
                         ),
                       ),
                     const SizedBox(height: 12),
                     Text(
-                      'Geçmiş Reset Kayıtları (\${logList.length})',
+                      'Geçmiş Reset Kayıtları (${logList.length})',
                       style: const TextStyle(
                           fontWeight: FontWeight.bold, fontSize: 14),
                     ),
@@ -197,7 +197,7 @@ class _HeatingStatusState extends State<HeatingStatus> {
                                   const TextStyle(fontWeight: FontWeight.w600),
                             ),
                             subtitle: Text(
-                              '\${item['time'] ?? '-'}\nMin RAM: \${item['minFreeHeap'] ?? '-'} B · Kurtarma: \${item['recoveryUsed'] ?? 0}/8',
+                              '${item['time'] ?? '-'}\nMin RAM: ${item['minFreeHeap'] ?? '-'} B · Kurtarma: ${item['recoveryUsed'] ?? 0}/8',
                             ),
                             isThreeLine: true,
                           ),
@@ -249,7 +249,7 @@ class _HeatingStatusState extends State<HeatingStatus> {
                                 Row(
                                   children: [
                                     Text(
-                                      'ESP32 · \${_label(current.esp32)}',
+                                      'ESP32 · ${_label(current.esp32)}',
                                       style: const TextStyle(
                                           fontWeight: FontWeight.bold),
                                     ),
@@ -303,7 +303,7 @@ class _HeatingStatusState extends State<HeatingStatus> {
                       ),
                     ),
                   const SizedBox(height: 12),
-                  Text('ESP8266 · \${_label(current.esp8266)}',
+                  Text('ESP8266 · ${_label(current.esp8266)}',
                       style: const TextStyle(fontWeight: FontWeight.bold)),
                   _reportTime(context, current.relayLastSeenAt,
                       current.evaluatedAt, 'relay-report-time'),
@@ -341,14 +341,14 @@ class _HeatingStatusState extends State<HeatingStatus> {
       if (now != null) {
         final seconds = ((now - timestamp) ~/ 1000).clamp(0, 2147483647);
         age = seconds < 60
-            ? '\$seconds sn önce'
+            ? '$seconds sn önce'
             : seconds < 3600
-                ? '\${seconds ~/ 60} dk önce'
+                ? '${seconds ~/ 60} dk önce'
                 : seconds < 86400
-                    ? '\${seconds ~/ 3600} sa önce'
-                    : '\${seconds ~/ 86400} gün önce';
+                    ? '${seconds ~/ 3600} sa önce'
+                    : '${seconds ~/ 86400} gün önce';
       }
-      text = 'Son bildirim: \$clock\${age.isEmpty ? '' : ' · \$age'}';
+      text = 'Son bildirim: $clock${age.isEmpty ? '' : ' · $age'}';
     }
     return Padding(
       padding: const EdgeInsets.only(top: 4),
@@ -389,7 +389,7 @@ class _HeatingStatusState extends State<HeatingStatus> {
                 ? 'Bekleniyor'
                 : 'Doğrulanamıyor';
     return Semantics(
-        label: '\$text. \${feedback.detail}',
+        label: '$text. ${feedback.detail}',
         button: true,
         child: InkWell(
           key: const ValueKey('heating-status'),
@@ -406,7 +406,7 @@ class _HeatingStatusState extends State<HeatingStatus> {
                             : pending
                                 ? Icons.hourglass_top
                                 : Icons.help_outline,
-                        key: ValueKey('relay-\${feedback.relay.name}'),
+                        key: ValueKey('relay-${feedback.relay.name}'),
                         size: 20,
                         color: color),
                     const SizedBox(width: 4),

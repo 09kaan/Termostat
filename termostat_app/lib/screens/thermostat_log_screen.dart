@@ -3,6 +3,7 @@ import 'package:firebase_database/firebase_database.dart';
 import 'package:provider/provider.dart';
 import '../providers/thermostat_provider.dart';
 import '../providers/settings_provider.dart';
+import '../models/heating_feedback.dart';
 import '../utils/haptics_helper.dart';
 import '../widgets/dynamic_climate_chart.dart';
 import '../widgets/energy_cost_card.dart';
@@ -93,6 +94,15 @@ class _ThermostatLogScreenState extends State<ThermostatLogScreen> {
     }
   }
 
+  static String _normalizeMode(dynamic rawMode, dynamic rawHeating) {
+    if (rawHeating is bool) return rawHeating ? 'on' : 'off';
+    final s = rawMode?.toString().toLowerCase().trim() ?? '';
+    if (s == 'on' || s == 'heating_on' || s == 'heat' || s == 'true' || s == '1') {
+      return 'on';
+    }
+    return 'off';
+  }
+
   Future<void> _fetchLogData() async {
     if (!mounted) return;
     setState(() {
@@ -115,18 +125,25 @@ class _ThermostatLogScreenState extends State<ThermostatLogScreen> {
             .map((entry) {
               if (entry.value is Map) {
                 final entryMap = Map<String, dynamic>.from(entry.value as Map);
-                final timestampStr = entryMap['timestamp']?.toString();
-                final modeStr = entryMap['mode']?.toString();
-                final sourceStr = entryMap['source']?.toString();
-                if (timestampStr != null && modeStr != null) {
-                  final dt = DateTime.tryParse(timestampStr);
-                  if (dt != null) {
-                    return LogEntry(
-                      timestamp: dt.toLocal(),
-                      mode: modeStr == 'on' ? 'on' : 'off',
-                      source: sourceStr,
-                    );
-                  }
+                final tsRaw = entryMap['timestamp'];
+                DateTime? dt;
+                if (tsRaw is int) {
+                  dt = DateTime.fromMillisecondsSinceEpoch(
+                    tsRaw > 100000000000 ? tsRaw : tsRaw * 1000,
+                  ).toLocal();
+                } else if (tsRaw is String) {
+                  dt = DateTime.tryParse(tsRaw)?.toLocal();
+                }
+                if (dt != null) {
+                  final normalized = _normalizeMode(
+                    entryMap['mode'],
+                    entryMap['isHeating'],
+                  );
+                  return LogEntry(
+                    timestamp: dt,
+                    mode: normalized,
+                    source: entryMap['source']?.toString(),
+                  );
                 }
               }
               return null;
@@ -136,7 +153,7 @@ class _ThermostatLogScreenState extends State<ThermostatLogScreen> {
 
         parsed.sort((a, b) => a.timestamp.compareTo(b.timestamp));
 
-        // Ardışık aynı mod kayıtlarını (eski uygulama açılış loglarını) temizle
+        // Ardışık aynı durum kayıtlarını temizle, yalnızca gerçek durum geçişlerini tut
         final deduplicated = <LogEntry>[];
         for (final entry in parsed) {
           if (deduplicated.isEmpty || deduplicated.last.mode != entry.mode) {
@@ -162,16 +179,19 @@ class _ThermostatLogScreenState extends State<ThermostatLogScreen> {
     }
   }
 
-  /// Seçili haftanın 7 günü için gece yarısı devrini (midnight rollover)
-  /// ve önceki haftadan devreden son kombi durumunu hesaba katarak özet üretir.
+  /// Seçili haftanın 7 günü için açık/kapalı kalma sürelerini hesaplar.
+  /// Eğer geçmişten devreden bir log yoksa bile o gün sensör ölçümü varsa veya
+  /// mevcut gün ise, ilk durumun öncesini ve bugünün kalanını mevcut duruma göre tamamlar.
   Map<String, DailyLogSummary> _calculateWeekSummaries(
     List<LogEntry> allEntries,
-    DateTime weekStart,
-  ) {
+    DateTime weekStart, {
+    required bool currentlyHeating,
+  }) {
     final Map<String, DailyLogSummary> summaries = {};
     final now = DateTime.now();
+    final todayKey = _formatDayKey(now);
 
-    // Hafta başlamadan önceki son durumu bul (Pazar gecesinden Pazartesi 00:00'a devir)
+    // Hafta başlamadan önceki son durumu bul
     String? carryOverMode;
     for (final entry in allEntries) {
       if (entry.timestamp.isBefore(weekStart)) {
@@ -191,6 +211,7 @@ class _ThermostatLogScreenState extends State<ThermostatLogScreen> {
       final dayDate = weekStart.add(Duration(days: i));
       final dayKey = _formatDayKey(dayDate);
       final dayEntries = entriesByDay[dayKey] ?? [];
+      final hasSensorLogs = (_roomLogsByDay[dayKey]?.isNotEmpty ?? false);
 
       final startOfDay =
           DateTime(dayDate.year, dayDate.month, dayDate.day, 0, 0, 0);
@@ -208,8 +229,22 @@ class _ThermostatLogScreenState extends State<ThermostatLogScreen> {
 
       Duration heatingOnDuration = Duration.zero;
       Duration heatingOffDuration = Duration.zero;
-      DateTime? lastTimestamp = carryOverMode != null ? startOfDay : null;
-      String? lastMode = carryOverMode;
+
+      // Eğer önceki günden devir yoksa ama bugün ilk kayıt varsa, gece 00:00'dan
+      // ilk kayda kadar olan süreyi ilk kaydın tersi (veya kapalı) kabul et
+      String? initialMode = carryOverMode;
+      if (initialMode == null) {
+        if (dayEntries.isNotEmpty) {
+          initialMode = dayEntries.first.mode == 'on' ? 'off' : 'on';
+        } else if (dayKey == todayKey) {
+          initialMode = currentlyHeating ? 'on' : 'off';
+        } else if (hasSensorLogs) {
+          initialMode = 'off';
+        }
+      }
+
+      DateTime? lastTimestamp = initialMode != null ? startOfDay : null;
+      String? lastMode = initialMode;
 
       for (final entry in dayEntries) {
         if (entry.timestamp.isAfter(now)) break;
@@ -239,7 +274,12 @@ class _ThermostatLogScreenState extends State<ThermostatLogScreen> {
         }
       }
 
-      carryOverMode = lastMode;
+      if (dayEntries.isNotEmpty) {
+        carryOverMode = lastMode;
+      } else if (carryOverMode != null) {
+        // Aynı durumu ertesi güne devretmeye devam et
+      }
+
       summaries[dayKey] = DailyLogSummary(
         day: dayKey,
         heatingOnDuration: heatingOnDuration,
@@ -267,7 +307,6 @@ class _ThermostatLogScreenState extends State<ThermostatLogScreen> {
 
       for (final day in weekDays) {
         final dayKey = _formatDayKey(day);
-        // Önce kök log/$dayKey, yoksa devices/$deviceId/room_logs/$dayKey kontrol et
         var snapshot = await _database.child('log/$dayKey').get();
         if (!snapshot.exists || snapshot.value == null) {
           snapshot = await _database
@@ -340,10 +379,28 @@ class _ThermostatLogScreenState extends State<ThermostatLogScreen> {
       return Center(child: Text('Hata: ${_error!}'));
     }
 
+    final targetTemp = context.select<ThermostatProvider, double?>(
+      (p) => p.thermostat?.targetTemperature,
+    );
+    final currentTemp = context.select<ThermostatProvider, double?>(
+      (p) => p.thermostat?.currentTemperature,
+    );
+    final isCurrentlyHeating = context.select<ThermostatProvider, bool>(
+      (p) =>
+          p.heatingFeedback.relay == RelayState.on ||
+          (p.thermostat?.mode == 'on' &&
+              (p.thermostat?.currentTemperature ?? 25) <
+                  (p.thermostat?.targetTemperature ?? 20)),
+    );
+
     final DateTime startOfNextWeek =
         _selectedWeekStart.add(const Duration(days: 7));
     final Map<String, DailyLogSummary> selectedWeekSummaries =
-        _calculateWeekSummaries(_logEntries, _selectedWeekStart);
+        _calculateWeekSummaries(
+      _logEntries,
+      _selectedWeekStart,
+      currentlyHeating: isCurrentlyHeating,
+    );
 
     Duration totalWeekOnDuration = Duration.zero;
     double accumulatedTempSum = 0;
@@ -367,13 +424,6 @@ class _ThermostatLogScreenState extends State<ThermostatLogScreen> {
       }
     });
 
-    // Sadece targetTemperature değiştiğinde dinle (gereksiz rebuild önleme)
-    final targetTemp = context.select<ThermostatProvider, double?>(
-      (p) => p.thermostat?.targetTemperature,
-    );
-    final currentTemp = context.select<ThermostatProvider, double?>(
-      (p) => p.thermostat?.currentTemperature,
-    );
     final weekAvgTemp =
         tempCount > 0 ? accumulatedTempSum / tempCount : (currentTemp ?? 21.0);
 
@@ -400,7 +450,7 @@ class _ThermostatLogScreenState extends State<ThermostatLogScreen> {
           fromY: 0.0,
           color: (onHours > 0)
               ? (isSelectedDay ? Colors.deepOrange : Colors.deepOrangeAccent)
-              : Colors.transparent,
+              : Colors.deepOrangeAccent.withOpacity(0.15),
           width: isSelectedDay ? 18 : 14,
           borderRadius: BorderRadius.circular(4),
         ));
@@ -410,7 +460,7 @@ class _ThermostatLogScreenState extends State<ThermostatLogScreen> {
           fromY: 0.0,
           color: (offHours > 0)
               ? (isSelectedDay ? Colors.blueGrey.shade700 : Colors.blueGrey)
-              : Colors.transparent,
+              : Colors.blueGrey.withOpacity(0.15),
           width: isSelectedDay ? 18 : 14,
           borderRadius: BorderRadius.circular(4),
         ));
@@ -433,7 +483,7 @@ class _ThermostatLogScreenState extends State<ThermostatLogScreen> {
       }
     }
     final dynamicMaxY =
-        maxDataValue < 4.0 ? 4.0 : (maxDataValue + 1).ceilToDouble();
+        maxDataValue < 4.0 ? 4.0 : (maxDataValue + 2).ceilToDouble().clamp(4.0, 24.0);
 
     double dynamicInterval = dynamicMaxY / 4;
     if (dynamicInterval <= 1) {

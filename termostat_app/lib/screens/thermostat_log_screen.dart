@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:provider/provider.dart';
@@ -19,6 +20,7 @@ class ThermostatLogScreen extends StatefulWidget {
 
 class _ThermostatLogScreenState extends State<ThermostatLogScreen> {
   final DatabaseReference _database = FirebaseDatabase.instance.ref();
+  StreamSubscription<DatabaseEvent>? _logSub;
   List<LogEntry> _logEntries = [];
   bool _isLoading = true;
   String? _error;
@@ -52,8 +54,14 @@ class _ThermostatLogScreenState extends State<ThermostatLogScreen> {
         .copyWith(
             hour: 0, minute: 0, second: 0, millisecond: 0, microsecond: 0);
     _selectedDayKey = _formatDayKey(now);
-    _fetchLogData();
+    _listenLogData();
     _fetchRoomLogs();
+  }
+
+  @override
+  void dispose() {
+    _logSub?.cancel();
+    super.dispose();
   }
 
   void _navigateWeek(int offset) {
@@ -97,82 +105,134 @@ class _ThermostatLogScreenState extends State<ThermostatLogScreen> {
   static String _normalizeMode(dynamic rawMode, dynamic rawHeating) {
     if (rawHeating is bool) return rawHeating ? 'on' : 'off';
     final s = rawMode?.toString().toLowerCase().trim() ?? '';
-    if (s == 'on' || s == 'heating_on' || s == 'heat' || s == 'true' || s == '1') {
+    if (s == 'on' ||
+        s == 'heating_on' ||
+        s == 'heat' ||
+        s == 'true' ||
+        s == '1') {
       return 'on';
     }
     return 'off';
   }
 
-  Future<void> _fetchLogData() async {
-    if (!mounted) return;
-    setState(() {
-      _isLoading = true;
-      _error = null;
-    });
+  /// Log kayıtlarındaki saat dilimi hatasını düzeltir:
+  /// ESP32'deki writeHeatingLog fonksiyonu zaten GMT+3 (yerel) olan saatin sonuna
+  /// 'Z' eklediği için DateTime.tryParse bunu UTC sanıp +3 saat daha ekliyordu.
+  static DateTime? _parseLogTimestamp(dynamic tsRaw, dynamic sourceRaw) {
+    if (tsRaw is int) {
+      final ms = tsRaw > 100000000000 ? tsRaw : tsRaw * 1000;
+      return DateTime.fromMillisecondsSinceEpoch(ms).toLocal();
+    }
+    if (tsRaw is String) {
+      var str = tsRaw.trim();
+      final source = sourceRaw?.toString() ?? '';
+      // ESP32 logları GMT+3 yerel saatle yazılıp sonuna Z eklendiği için Z'yi kaldırarak yerel saat olarak oku
+      if (str.endsWith('Z')) {
+        final withoutZ = str.substring(0, str.length - 1);
+        final parsedLocal = DateTime.tryParse(withoutZ);
+        if (parsedLocal != null) {
+          final now = DateTime.now();
+          // Eğer Z'li hali gelecekte kalıyorsa (UTC+3 + 3 saat = +6 saat hatası) veya kaynak esp32 ise yerel saati kullan
+          final parsedUtcToLocal = DateTime.tryParse(str)?.toLocal();
+          if (source.contains('esp32') ||
+              source == 'mode_change' ||
+              source == 'relay_decision' ||
+              (parsedUtcToLocal != null &&
+                  parsedUtcToLocal.isAfter(now.add(const Duration(minutes: 5))))) {
+            return parsedLocal;
+          }
+          return parsedUtcToLocal ?? parsedLocal;
+        }
+      }
+      final dt = DateTime.tryParse(str);
+      return dt?.toLocal();
+    }
+    return null;
+  }
 
+  void _processLogSnapshot(DataSnapshot snapshot) {
+    if (snapshot.exists && snapshot.value is Map) {
+      final Map<dynamic, dynamic> data =
+          snapshot.value as Map<dynamic, dynamic>;
+      final parsed = data.entries
+          .map((entry) {
+            if (entry.value is Map) {
+              final entryMap = Map<String, dynamic>.from(entry.value as Map);
+              final dt = _parseLogTimestamp(
+                entryMap['timestamp'],
+                entryMap['source'],
+              );
+              if (dt != null) {
+                final normalized = _normalizeMode(
+                  entryMap['mode'],
+                  entryMap['isHeating'],
+                );
+                return LogEntry(
+                  timestamp: dt,
+                  mode: normalized,
+                  source: entryMap['source']?.toString(),
+                );
+              }
+            }
+            return null;
+          })
+          .whereType<LogEntry>()
+          .toList();
+
+      parsed.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+
+      final deduplicated = <LogEntry>[];
+      for (final entry in parsed) {
+        if (deduplicated.isEmpty || deduplicated.last.mode != entry.mode) {
+          deduplicated.add(entry);
+        }
+      }
+      _logEntries = deduplicated;
+    } else {
+      _logEntries = [];
+    }
+  }
+
+  void _listenLogData() {
+    final deviceId = Provider.of<ThermostatProvider>(context, listen: false)
+            .thermostat
+            ?.id ??
+        'device1';
+
+    _logSub?.cancel();
+    _logSub = _database.child('devices/$deviceId/log').onValue.listen((event) {
+      if (!mounted) return;
+      _processLogSnapshot(event.snapshot);
+      setState(() {
+        _isLoading = false;
+        _error = null;
+      });
+    }, onError: (Object e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _error = 'Log verileri alınamadı: $e';
+      });
+    });
+  }
+
+  Future<void> _fetchLogData() async {
     try {
       final deviceId = Provider.of<ThermostatProvider>(context, listen: false)
               .thermostat
               ?.id ??
           'device1';
-
       final snapshot = await _database.child('devices/$deviceId/log').get();
-
-      if (snapshot.exists && snapshot.value is Map) {
-        final Map<dynamic, dynamic> data =
-            snapshot.value as Map<dynamic, dynamic>;
-        final parsed = data.entries
-            .map((entry) {
-              if (entry.value is Map) {
-                final entryMap = Map<String, dynamic>.from(entry.value as Map);
-                final tsRaw = entryMap['timestamp'];
-                DateTime? dt;
-                if (tsRaw is int) {
-                  dt = DateTime.fromMillisecondsSinceEpoch(
-                    tsRaw > 100000000000 ? tsRaw : tsRaw * 1000,
-                  ).toLocal();
-                } else if (tsRaw is String) {
-                  dt = DateTime.tryParse(tsRaw)?.toLocal();
-                }
-                if (dt != null) {
-                  final normalized = _normalizeMode(
-                    entryMap['mode'],
-                    entryMap['isHeating'],
-                  );
-                  return LogEntry(
-                    timestamp: dt,
-                    mode: normalized,
-                    source: entryMap['source']?.toString(),
-                  );
-                }
-              }
-              return null;
-            })
-            .whereType<LogEntry>()
-            .toList();
-
-        parsed.sort((a, b) => a.timestamp.compareTo(b.timestamp));
-
-        // Ardışık aynı durum kayıtlarını temizle, yalnızca gerçek durum geçişlerini tut
-        final deduplicated = <LogEntry>[];
-        for (final entry in parsed) {
-          if (deduplicated.isEmpty || deduplicated.last.mode != entry.mode) {
-            deduplicated.add(entry);
-          }
-        }
-        _logEntries = deduplicated;
-      } else {
-        _logEntries = [];
-      }
+      if (!mounted) return;
+      setState(() {
+        _processLogSnapshot(snapshot);
+        _isLoading = false;
+        _error = null;
+      });
     } catch (e) {
       if (mounted) {
         setState(() {
           _error = 'Log verileri alınamadı: $e';
-        });
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
           _isLoading = false;
         });
       }
@@ -180,18 +240,20 @@ class _ThermostatLogScreenState extends State<ThermostatLogScreen> {
   }
 
   /// Seçili haftanın 7 günü için açık/kapalı kalma sürelerini hesaplar.
-  /// Eğer geçmişten devreden bir log yoksa bile o gün sensör ölçümü varsa veya
-  /// mevcut gün ise, ilk durumun öncesini ve bugünün kalanını mevcut duruma göre tamamlar.
+  /// 1. Öncelikle gerçek aç/kapa loglarını (`devices/device1/log`) kullanır.
+  /// 2. Eğer bir günde hiç aç/kapa logu yoksa (veya loglama yeni başladıysa),
+  ///    5 dakikalık oda sıcaklık/nem loglarındaki (`_roomLogsByDay`) ısınma artış
+  ///    trendinden ve hedef sıcaklıktan o günün çalışma süresini otomatik çıkarır.
+  /// 3. Asla mevcut anlık "Açık" durumunu geçmiş saatlere (00:00'dan beri çalışıyormuş gibi) yaymaz.
   Map<String, DailyLogSummary> _calculateWeekSummaries(
     List<LogEntry> allEntries,
     DateTime weekStart, {
     required bool currentlyHeating,
+    required double? targetTemp,
   }) {
     final Map<String, DailyLogSummary> summaries = {};
     final now = DateTime.now();
-    final todayKey = _formatDayKey(now);
 
-    // Hafta başlamadan önceki son durumu bul
     String? carryOverMode;
     for (final entry in allEntries) {
       if (entry.timestamp.isBefore(weekStart)) {
@@ -211,7 +273,7 @@ class _ThermostatLogScreenState extends State<ThermostatLogScreen> {
       final dayDate = weekStart.add(Duration(days: i));
       final dayKey = _formatDayKey(dayDate);
       final dayEntries = entriesByDay[dayKey] ?? [];
-      final hasSensorLogs = (_roomLogsByDay[dayKey]?.isNotEmpty ?? false);
+      final roomEntries = _roomLogsByDay[dayKey] ?? [];
 
       final startOfDay =
           DateTime(dayDate.year, dayDate.month, dayDate.day, 0, 0, 0);
@@ -227,28 +289,24 @@ class _ThermostatLogScreenState extends State<ThermostatLogScreen> {
         continue;
       }
 
+      final effectiveEnd = endOfDay.isAfter(now) ? now : endOfDay;
+      final totalElapsedToday = effectiveEnd.difference(startOfDay);
+
       Duration heatingOnDuration = Duration.zero;
       Duration heatingOffDuration = Duration.zero;
 
-      // Eğer önceki günden devir yoksa ama bugün ilk kayıt varsa, gece 00:00'dan
-      // ilk kayda kadar olan süreyi ilk kaydın tersi (veya kapalı) kabul et
-      String? initialMode = carryOverMode;
-      if (initialMode == null) {
-        if (dayEntries.isNotEmpty) {
-          initialMode = dayEntries.first.mode == 'on' ? 'off' : 'on';
-        } else if (dayKey == todayKey) {
-          initialMode = currentlyHeating ? 'on' : 'off';
-        } else if (hasSensorLogs) {
-          initialMode = 'off';
-        }
-      }
+      if (dayEntries.isNotEmpty || carryOverMode != null) {
+        // Gerçek log kayıtlarıyla hesapla:
+        // Eğer önceki günden devreden bir durum yoksa, günün ilk loguna kadar olan
+        // süreyi ilk logun TERSİ kabul et (örn. ilk log 14:30'da 'on' ise 00:00-14:30 arası 'off' idi).
+        String initialMode = carryOverMode ??
+            (dayEntries.first.mode == 'on' ? 'off' : 'on');
 
-      DateTime? lastTimestamp = initialMode != null ? startOfDay : null;
-      String? lastMode = initialMode;
+        DateTime lastTimestamp = startOfDay;
+        String lastMode = initialMode;
 
-      for (final entry in dayEntries) {
-        if (entry.timestamp.isAfter(now)) break;
-        if (lastTimestamp != null && lastMode != null) {
+        for (final entry in dayEntries) {
+          if (entry.timestamp.isAfter(effectiveEnd)) break;
           final duration = entry.timestamp.difference(lastTimestamp);
           if (!duration.isNegative) {
             if (lastMode == 'on') {
@@ -257,27 +315,53 @@ class _ThermostatLogScreenState extends State<ThermostatLogScreen> {
               heatingOffDuration += duration;
             }
           }
+          lastTimestamp = entry.timestamp;
+          lastMode = entry.mode;
         }
-        lastTimestamp = entry.timestamp;
-        lastMode = entry.mode;
-      }
 
-      if (lastTimestamp != null && lastMode != null) {
-        final effectiveEnd = endOfDay.isAfter(now) ? now : endOfDay;
         if (effectiveEnd.isAfter(lastTimestamp)) {
-          final duration = effectiveEnd.difference(lastTimestamp);
+          final tailDuration = effectiveEnd.difference(lastTimestamp);
           if (lastMode == 'on') {
-            heatingOnDuration += duration;
+            heatingOnDuration += tailDuration;
           } else {
-            heatingOffDuration += duration;
+            heatingOffDuration += tailDuration;
           }
         }
-      }
 
-      if (dayEntries.isNotEmpty) {
         carryOverMode = lastMode;
-      } else if (carryOverMode != null) {
-        // Aynı durumu ertesi güne devretmeye devam et
+      } else if (roomEntries.length >= 2) {
+        // Eğer o gün için devices/device1/log altında hiç kayıt yoksa ama
+        // 5 dakikalık sensör kayıtları varsa, sıcaklık yükseliş dilimlerinden
+        // geçmiş çalışma süresini tahmin et (böylece kombi kapalıyken de geçmiş çalışma saatleri görünür).
+        final chronological = List<RoomLogEntry>.from(roomEntries)
+          ..sort((a, b) => a.time.compareTo(b.time));
+
+        int onMinutes = 0;
+        for (int j = 1; j < chronological.length; j++) {
+          final prevT = chronological[j - 1].temperature;
+          final currT = chronological[j].temperature;
+          final prevMin = _parseTimeMinutes(chronological[j - 1].time);
+          final currMin = _parseTimeMinutes(chronological[j].time);
+          final deltaMin = (currMin - prevMin).round().clamp(1, 15);
+
+          if (prevT != null && currT != null) {
+            final diff = currT - prevT;
+            // Sıcaklık 5-10 dk içinde belirgin yükseliyorsa (+0.1°C ve üzeri) kombi o dilimde çalışmıştır
+            if (diff >= 0.1) {
+              onMinutes += deltaMin;
+            }
+          }
+        }
+
+        heatingOnDuration = Duration(minutes: onMinutes);
+        if (heatingOnDuration > totalElapsedToday) {
+          heatingOnDuration = totalElapsedToday;
+        }
+        heatingOffDuration = totalElapsedToday - heatingOnDuration;
+      } else {
+        // Hiç log ve sensör kaydı olmayan gün
+        heatingOnDuration = Duration.zero;
+        heatingOffDuration = totalElapsedToday;
       }
 
       summaries[dayKey] = DailyLogSummary(
@@ -386,11 +470,7 @@ class _ThermostatLogScreenState extends State<ThermostatLogScreen> {
       (p) => p.thermostat?.currentTemperature,
     );
     final isCurrentlyHeating = context.select<ThermostatProvider, bool>(
-      (p) =>
-          p.heatingFeedback.relay == RelayState.on ||
-          (p.thermostat?.mode == 'on' &&
-              (p.thermostat?.currentTemperature ?? 25) <
-                  (p.thermostat?.targetTemperature ?? 20)),
+      (p) => p.heatingFeedback.relay == RelayState.on,
     );
 
     final DateTime startOfNextWeek =
@@ -400,6 +480,7 @@ class _ThermostatLogScreenState extends State<ThermostatLogScreen> {
       _logEntries,
       _selectedWeekStart,
       currentlyHeating: isCurrentlyHeating,
+      targetTemp: targetTemp,
     );
 
     Duration totalWeekOnDuration = Duration.zero;
@@ -482,8 +563,9 @@ class _ThermostatLogScreenState extends State<ThermostatLogScreen> {
         }
       }
     }
-    final dynamicMaxY =
-        maxDataValue < 4.0 ? 4.0 : (maxDataValue + 2).ceilToDouble().clamp(4.0, 24.0);
+    final dynamicMaxY = maxDataValue < 4.0
+        ? 4.0
+        : (maxDataValue + 2).ceilToDouble().clamp(4.0, 24.0);
 
     double dynamicInterval = dynamicMaxY / 4;
     if (dynamicInterval <= 1) {

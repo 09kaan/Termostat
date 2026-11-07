@@ -900,19 +900,21 @@ class WizLightsScreenState extends State<WizLightsScreen> {
     if (id != null) _openControls(id);
   }
 
-  bool _isBedroomRoom(RoomSpec room) {
-    final rId = room.id.toLowerCase();
-    final rName = room.name.toLowerCase();
+  bool _isBedroomRoom(String rIdStr, String rNameStr) {
+    final rId = rIdStr.toLowerCase();
+    final rName = rNameStr.toLowerCase();
     return rId.contains('bed') ||
         rId.contains('yatak') ||
         rName.contains('yatak');
   }
 
   Widget _buildBedroom3DOverview({
-    required RoomSpec room,
-    required List<FixtureSpec> fixtures,
+    required String roomName,
+    required String dimensions,
+    required String area,
+    required bool hasSensor,
+    required String? selectedType,
     required String? fixture,
-    required FixtureSpec? selected,
     required String? id,
     required FixtureState state,
     required bool enabled,
@@ -933,8 +935,8 @@ class WizLightsScreenState extends State<WizLightsScreen> {
     ];
 
     final lightLabel = id == null
-        ? '${room.name.toLowerCase()} · Ampul eşleştirilmedi'
-        : '${_map(lights[id])['name'] ?? 'Ampul'} · ${selected?.type ?? ''}';
+        ? '${roomName.toLowerCase()} · Ampul eşleştirilmedi'
+        : '${_map(lights[id])['name'] ?? 'Ampul'} · ${selectedType ?? ''}';
 
     final statusText = state.feedback ??
         (state.on == true
@@ -947,10 +949,10 @@ class WizLightsScreenState extends State<WizLightsScreen> {
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
       children: [
         Text(
-          '${room.dimensions}${room.area.isNotEmpty ? ' · ${room.area}' : ''} · 3B Etkileşimli Oda',
+          '$dimensions${area.isNotEmpty ? ' · $area' : ''} · 3B Etkileşimli Oda',
           style: Theme.of(context).textTheme.bodyMedium,
         ),
-        if (room.sensor) ...[
+        if (hasSensor) ...[
           const SizedBox(height: 14),
           Wrap(
             spacing: 28,
@@ -1129,7 +1131,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
           sensor != null &&
           !thermostat.isLoading &&
           thermostat.error == null;
-      final isBedroom = _isBedroomRoom(room);
+      final isBedroom = _isBedroomRoom(room.id, room.name);
       final isHeating = thermostat.heatingFeedback.relay == RelayState.on;
 
       child = Column(
@@ -1176,10 +1178,12 @@ class WizLightsScreenState extends State<WizLightsScreen> {
           Expanded(
             child: isBedroom
                 ? _buildBedroom3DOverview(
-                    room: room,
-                    fixtures: fixtures,
+                    roomName: room.name,
+                    dimensions: room.dimensions,
+                    area: room.area,
+                    hasSensor: room.sensor,
+                    selectedType: selected?.type,
                     fixture: fixture,
-                    selected: selected,
                     id: id,
                     state: state,
                     enabled: enabled,

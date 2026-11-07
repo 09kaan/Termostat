@@ -1,0 +1,1067 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>3B Yatak Odası Planlayıcı v4 (Eşya Kilitleme + Akıllı Ampul Tetikleme)</title>
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body { margin: 0; background: #18191d; color: #fff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; overflow: hidden; user-select: none; }
+    
+    /* Üst Hızlı Kontrol Çubuğu (Mobil & Harita Odası Görünümü İçin) */
+    #top-bar {
+      position: absolute; top: 10px; left: 10px; right: 10px;
+      display: flex; justify-content: space-between; align-items: center; gap: 6px;
+      pointer-events: none; z-index: 20;
+    }
+    .bar-group {
+      display: flex; gap: 6px; align-items: center; pointer-events: auto;
+      background: rgba(18, 18, 22, 0.86); backdrop-filter: blur(8px);
+      padding: 6px 8px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.1);
+    }
+    .top-btn {
+      background: #2b2d35; color: #eee; border: 1px solid #40434e;
+      border-radius: 7px; padding: 6px 10px; font-size: 11.5px; font-weight: 600;
+      cursor: pointer; display: flex; align-items: center; gap: 4px; transition: 0.15s;
+    }
+    .top-btn.locked { background: #1f5e3b; border-color: #38a169; color: #e6fffa; }
+    .top-btn.unlocked { background: #c81020; border-color: #ff4d5e; color: #fff; }
+    .top-btn.light-on { background: #d49a1a; color: #111; border-color: #ffe28a; box-shadow: 0 0 8px rgba(255, 200, 70, 0.4); }
+
+    /* Sağ Eşya ve Kilit Paneli */
+    #items-panel {
+      position: absolute; top: 56px; right: 10px;
+      background: rgba(18, 18, 22, 0.92); backdrop-filter: blur(8px);
+      padding: 12px; border-radius: 12px; display: none; flex-direction: column;
+      gap: 6px; font-size: 12px; width: 235px; border: 1px solid rgba(255,255,255,0.1);
+      max-height: calc(100vh - 70px); overflow-y: auto; z-index: 15;
+    }
+    #items-panel.open { display: flex; }
+
+    .item-row { display: flex; gap: 4px; align-items: center; }
+    .item-btn {
+      flex: 1; background: #2b2d35; color: #ddd; border: 1px solid #3d404b;
+      border-radius: 6px; padding: 6px 8px; text-align: left; cursor: pointer;
+      transition: 0.15s; font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .item-btn.active { background: #c81020; color: #fff; border-color: #ff3b4b; font-weight: 600; }
+    .item-lock-btn {
+      background: #2b2d35; color: #aaa; border: 1px solid #3d404b;
+      border-radius: 6px; padding: 6px 7px; cursor: pointer; font-size: 11px;
+    }
+    .item-lock-btn.is-locked { background: #1f5e3b; color: #fff; border-color: #38a169; }
+
+    /* Alt Seçili Eşya Düzenleme Paneli */
+    #controls-ui {
+      position: absolute; bottom: 10px; left: 10px;
+      background: rgba(18, 18, 22, 0.92); backdrop-filter: blur(8px);
+      padding: 12px 14px; border-radius: 12px; display: none; flex-direction: column;
+      gap: 8px; font-size: 12px; min-width: 270px; max-width: calc(100vw - 20px);
+      border: 1px solid rgba(255,255,255,0.1); z-index: 15;
+    }
+    #controls-ui.open { display: flex; }
+
+    label { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+    input[type="range"] { cursor: pointer; flex: 1; accent-color: #c81020; }
+    .badge { display: inline-block; background: #c81020; padding: 2px 8px; border-radius: 5px; font-size: 11px; font-weight: bold; }
+    .coords { font-family: monospace; color: #aaa; font-size: 10.5px; }
+    .btn-row { display: flex; gap: 5px; }
+    .quick-btn { flex: 1; background: #2f323b; color: #eee; border: 1px solid #454954; border-radius: 6px; padding: 5px 6px; cursor: pointer; font-size: 11px; }
+    .quick-btn:hover { background: #404450; }
+    
+    #toast {
+      position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
+      background: rgba(20, 20, 26, 0.9); color: #fff; padding: 7px 14px;
+      border-radius: 20px; font-size: 11.5px; pointer-events: none;
+      opacity: 0; transition: opacity 0.25s; z-index: 30; border: 1px solid rgba(255,255,255,0.12);
+    }
+    canvas { display: block; width: 100vw; height: 100vh; }
+  </style>
+</head>
+<body>
+  <div id="top-bar">
+    <div class="bar-group">
+      <button id="btnGlobalLock" class="top-btn locked" title="Eşyaların yerini kilitle / aç">🔒 Eşyalar Kilitli</button>
+      <button id="btnTogglePanel" class="top-btn" title="Eşya listesini ve ayarları göster/gizle">🛠️ Düzenle</button>
+    </div>
+    <div class="bar-group">
+      <button id="btnCeilingLight" class="top-btn light-on">💡 Tavan</button>
+      <button id="btnFloorLamp" class="top-btn light-on">🛋️ Abajur</button>
+      <button id="btnDoorToggle" class="top-btn">🚪 Kapı</button>
+    </div>
+  </div>
+
+  <div id="items-panel">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:2px;">
+      <strong style="font-size:12.5px;">Odadaki Eşyalar (11)</strong>
+      <button id="btnResetLayout" class="quick-btn" style="flex:0; padding:3px 7px; font-size:10px;">Sıfırla</button>
+    </div>
+    <small style="color:#aaa; font-size:10.5px; margin-bottom:4px;">
+      Tek tek kilitlemek için sağdaki 🔒 ikonuna dokunun.
+    </small>
+    <div id="itemList" style="display:flex; flex-direction:column; gap:4px;"></div>
+  </div>
+
+  <div id="controls-ui">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <span>Seçili: <span id="selectedName" class="badge">160x60 Çalışma Masası</span></span>
+      <button id="btnLockSelected" class="item-lock-btn">🔓 Kilitle</button>
+    </div>
+    <div class="coords" id="coordDisplay">Konum: X: 0.00m | Z: 0.00m | Yön: 0°</div>
+    <label>Yön (Döndür): <input id="objRotY" type="range" min="-3.1416" max="3.1416" step="0.02" value="0"></label>
+    <div class="btn-row">
+      <button class="quick-btn" id="rotLeft90">↺ -90°</button>
+      <button class="quick-btn" id="rotZero">0°</button>
+      <button class="quick-btn" id="rotRight90">↻ +90°</button>
+    </div>
+    <div id="monitorExtra" style="display:none; flex-direction:column; gap:6px; border-top: 1px solid #3a3a44; padding-top:6px;">
+      <strong style="font-size:11px;">Monitör Ergonomi Ayarları</strong>
+      <label>Boy: <input id="heightY" type="range" min="-0.08" max="0.04" step="0.005" value="0"></label>
+      <label>Swivel: <input id="swivelY" type="range" min="-0.52" max="0.52" step="0.02" value="0"></label>
+      <label>Tilt: <input id="tiltX" type="range" min="-0.35" max="0.09" step="0.02" value="0"></label>
+    </div>
+  </div>
+
+  <div id="toast">Eşya konumları kaydedildi</div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    const STORAGE_KEY = 'termostat_bedroom_layout_v4';
+    const ROOM_W = 3.5;
+    const ROOM_D = 4.0;
+    const ROOM_H = 2.6;
+
+    // Başlangıçta harita ekranında rahat gezinme için eşyalar KİLİTLİ başlar
+    let isGlobalLocked = true;
+    let isEditPanelOpen = false;
+
+    function showToast(msg) {
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.style.opacity = '1';
+      clearTimeout(window._toastTimer);
+      window._toastTimer = setTimeout(() => { t.style.opacity = '0'; }, 1800);
+    }
+
+    function notifyFlutter(payload) {
+      if (window.FlutterRoomChannel && window.FlutterRoomChannel.postMessage) {
+        window.FlutterRoomChannel.postMessage(JSON.stringify(payload));
+      }
+    }
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x1b1c20);
+
+    const camera = new THREE.PerspectiveCamera(48, window.innerWidth / window.innerHeight, 0.05, 100);
+    camera.position.set(0.0, 3.8, 4.3);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.set(0, 0.7, 0);
+    controls.enableDamping = true;
+    controls.maxPolarAngle = Math.PI / 2 - 0.01;
+    controls.update();
+
+    const ambientLight = new THREE.AmbientLight(0xdbe2f0, 0.35);
+    scene.add(ambientLight);
+
+    const hemiLight = new THREE.HemisphereLight(0xffffff, 0x22242a, 0.25);
+    scene.add(hemiLight);
+
+    function addBoxTo(targetGroup, minX, minY, minZ, maxX, maxY, maxZ, mat) {
+      const w = maxX - minX, h = maxY - minY, d = maxZ - minZ;
+      const geo = new THREE.BoxGeometry(w, h, d);
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.position.set((minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      targetGroup.add(mesh);
+      return mesh;
+    }
+
+    // ODA MİMARİSİ
+    const roomGroup = new THREE.Group();
+    scene.add(roomGroup);
+
+    const floorGeo = new THREE.PlaneGeometry(ROOM_W, ROOM_D);
+    const floorMat = new THREE.MeshStandardMaterial({ color: 0x6f737a, roughness: 0.65, metalness: 0.05 });
+    const floorMesh = new THREE.Mesh(floorGeo, floorMat);
+    floorMesh.rotation.x = -Math.PI / 2;
+    floorMesh.receiveShadow = true;
+    roomGroup.add(floorMesh);
+
+    const gridHelper = new THREE.GridHelper(ROOM_D, 40, 0x4c4f57, 0x5d6169);
+    gridHelper.scale.x = ROOM_W / ROOM_D;
+    gridHelper.position.y = 0.002;
+    roomGroup.add(gridHelper);
+
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0xc9ccd1, roughness: 0.85, metalness: 0.02 });
+    const frontWallMat = new THREE.MeshStandardMaterial({ color: 0xc9ccd1, roughness: 0.85, transparent: true, opacity: 0.18 });
+    const curtainMat = new THREE.MeshStandardMaterial({ color: 0x1e2024, roughness: 0.9 });
+    const radiatorMat = new THREE.MeshStandardMaterial({ color: 0xf2f4f7, roughness: 0.35, metalness: 0.2 });
+
+    addBoxTo(roomGroup, -ROOM_W/2 - 0.08, 0, -ROOM_D/2 - 0.08, ROOM_W/2 + 0.08, ROOM_H, -ROOM_D/2, wallMat);
+    addBoxTo(roomGroup, -ROOM_W/2 - 0.08, 0, -ROOM_D/2, -ROOM_W/2, ROOM_H, ROOM_D/2 + 0.08, wallMat);
+    addBoxTo(roomGroup, ROOM_W/2, 0, -ROOM_D/2, ROOM_W/2 + 0.08, ROOM_H, ROOM_D/2 + 0.08, wallMat);
+
+    addBoxTo(roomGroup, -ROOM_W/2 + 0.005, 0.88, -0.35, -ROOM_W/2 + 0.05, 2.52, 1.85, curtainMat);
+    addBoxTo(roomGroup, -ROOM_W/2 + 0.01, 0.12, 0.45, -ROOM_W/2 + 0.075, 0.72, 1.55, radiatorMat);
+
+    addBoxTo(roomGroup, -ROOM_W/2, 0, ROOM_D/2, 0.75, ROOM_H, ROOM_D/2 + 0.06, frontWallMat);
+    addBoxTo(roomGroup, 0.75, 2.08, ROOM_D/2, ROOM_W/2, ROOM_H, ROOM_D/2 + 0.06, frontWallMat);
+    addBoxTo(roomGroup, 1.60, 0, ROOM_D/2, ROOM_W/2, 2.08, ROOM_D/2 + 0.06, frontWallMat);
+
+    const doorPivot = new THREE.Group();
+    doorPivot.position.set(1.60, 0, ROOM_D / 2);
+    doorPivot.rotation.y = 0.55;
+    scene.add(doorPivot);
+
+    const doorPanelMat = new THREE.MeshStandardMaterial({ color: 0xf1f2f4, roughness: 0.45 });
+    const handleMat = new THREE.MeshStandardMaterial({ color: 0xc0c5cc, roughness: 0.25, metalness: 0.85 });
+    addBoxTo(doorPivot, -0.85, 0.01, -0.02, 0.0, 2.06, 0.02, doorPanelMat);
+    addBoxTo(doorPivot, -0.78, 0.98, -0.055, -0.70, 1.01, 0.055, handleMat);
+    doorPivot.userData = { isDoor: true, isOpen: true };
+
+    // ORTA TEPE TAVAN LAMBASI
+    const ceilingLightGroup = new THREE.Group();
+    ceilingLightGroup.name = "Orta Tavan Lambası";
+    ceilingLightGroup.position.set(0, ROOM_H, 0);
+    scene.add(ceilingLightGroup);
+
+    const fixtureMetalMat = new THREE.MeshStandardMaterial({ color: 0x222428, roughness: 0.4, metalness: 0.6 });
+    const ceilingBulbMat = new THREE.MeshStandardMaterial({
+      color: 0xfff6dc, emissive: 0xffd27d, emissiveIntensity: 1.4, roughness: 0.2
+    });
+
+    const mountMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.03, 24), fixtureMetalMat);
+    mountMesh.position.set(0, -0.015, 0);
+    ceilingLightGroup.add(mountMesh);
+
+    const cordMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.25, 12), fixtureMetalMat);
+    cordMesh.position.set(0, -0.14, 0);
+    ceilingLightGroup.add(cordMesh);
+
+    const ceilingShadeMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.24, 0.16, 32), fixtureMetalMat);
+    ceilingShadeMesh.position.set(0, -0.28, 0);
+    ceilingLightGroup.add(ceilingShadeMesh);
+
+    const diffuserMesh = new THREE.Mesh(new THREE.SphereGeometry(0.13, 24, 16), ceilingBulbMat);
+    diffuserMesh.position.set(0, -0.33, 0);
+    ceilingLightGroup.add(diffuserMesh);
+
+    const ceilingPointLight = new THREE.PointLight(0xfff1d0, 3.2, 9.0, 1.4);
+    ceilingPointLight.position.set(0, -0.42, 0);
+    ceilingPointLight.castShadow = true;
+    ceilingPointLight.shadow.mapSize.width = 1024;
+    ceilingPointLight.shadow.mapSize.height = 1024;
+    ceilingLightGroup.add(ceilingPointLight);
+
+    let isCeilingLightOn = true;
+
+    // EŞYA OLUŞTURUCULAR
+    function createWardrobe() {
+      const group = new THREE.Group();
+      group.name = "Adaçayı Yeşili Gardırop";
+      group.userData.id = "wardrobe";
+      const sageMat = new THREE.MeshStandardMaterial({ color: 0x788a73, roughness: 0.55, metalness: 0.08 });
+      const doorMat = new THREE.MeshStandardMaterial({ color: 0x7d9078, roughness: 0.5, metalness: 0.08 });
+      const darkGapMat = new THREE.MeshStandardMaterial({ color: 0x2d352b, roughness: 0.9 });
+      const silverMat = new THREE.MeshStandardMaterial({ color: 0xd1d6d8, roughness: 0.25, metalness: 0.85 });
+      const blackHandleMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.4, metalness: 0.3 });
+
+      addBoxTo(group, -0.60, 0.0, -0.275, 0.60, 1.96, 0.25, sageMat);
+      addBoxTo(group, -0.61, 1.96, -0.28, 0.61, 2.00, 0.28, sageMat);
+      addBoxTo(group, -0.59, 0.0, 0.24, 0.59, 0.08, 0.265, sageMat);
+      addBoxTo(group, -0.58, 0.08, 0.245, 0.58, 1.95, 0.252, darkGapMat);
+
+      addBoxTo(group, -0.592, 0.085, 0.25, 0.192, 0.415, 0.275, doorMat);
+      addBoxTo(group, -0.592, 0.425, 0.25, -0.203, 1.955, 0.275, doorMat);
+      addBoxTo(group, -0.197, 0.425, 0.25, 0.192, 1.955, 0.275, doorMat);
+      addBoxTo(group, 0.198, 0.085, 0.25, 0.592, 1.955, 0.275, doorMat);
+
+      addBoxTo(group, -0.25, 1.05, 0.275, -0.23, 1.25, 0.30, silverMat);
+      addBoxTo(group, -0.17, 1.05, 0.275, -0.15, 1.25, 0.30, silverMat);
+      addBoxTo(group, 0.23, 0.72, 0.275, 0.25, 0.92, 0.30, silverMat);
+      addBoxTo(group, -0.28, 0.235, 0.275, -0.12, 0.255, 0.30, blackHandleMat);
+      return group;
+    }
+
+    function createDresser() {
+      const group = new THREE.Group();
+      group.name = "4 Çekmeceli Şifonyer";
+      group.userData.id = "dresser";
+      const sageMat = new THREE.MeshStandardMaterial({ color: 0x788a73, roughness: 0.55, metalness: 0.08 });
+      const creamMat = new THREE.MeshStandardMaterial({ color: 0xf1efe7, roughness: 0.45, metalness: 0.05 });
+      const darkGapMat = new THREE.MeshStandardMaterial({ color: 0x2d352b, roughness: 0.9 });
+      const silverMat = new THREE.MeshStandardMaterial({ color: 0xd1d6d8, roughness: 0.25, metalness: 0.85 });
+
+      addBoxTo(group, -0.39, 0.0, -0.22, 0.39, 0.80, 0.21, sageMat);
+      addBoxTo(group, -0.405, 0.80, -0.23, 0.405, 0.83, 0.23, sageMat);
+      addBoxTo(group, -0.385, 0.0, 0.20, 0.385, 0.05, 0.22, sageMat);
+      addBoxTo(group, -0.37, 0.05, 0.205, 0.37, 0.79, 0.212, darkGapMat);
+
+      const drawerHeights = [0.06, 0.245, 0.43, 0.615];
+      for (let i = 0; i < 4; i++) {
+        const y0 = drawerHeights[i], y1 = y0 + 0.17, yc = (y0 + y1) / 2;
+        addBoxTo(group, -0.375, y0, 0.21, 0.375, y1, 0.228, sageMat);
+        addBoxTo(group, -0.335, y0 + 0.03, 0.225, 0.335, y1 - 0.03, 0.233, creamMat);
+        addBoxTo(group, -0.055, yc - 0.006, 0.233, 0.055, yc + 0.006, 0.248, silverMat);
+      }
+      return group;
+    }
+
+    function createArchedMirror() {
+      const group = new THREE.Group();
+      group.name = "Kemerli Boy Aynası";
+      group.userData.id = "mirror";
+      const blackFrameMat = new THREE.MeshStandardMaterial({ color: 0x161619, roughness: 0.35, metalness: 0.5 });
+      const glassMat = new THREE.MeshStandardMaterial({ color: 0x9aa5b1, roughness: 0.05, metalness: 0.92 });
+      const backMat = new THREE.MeshStandardMaterial({ color: 0x222225, roughness: 0.8 });
+
+      const bodyGroup = new THREE.Group();
+      bodyGroup.position.set(0, 0.82, 0);
+      bodyGroup.rotation.x = -0.09;
+      group.add(bodyGroup);
+
+      const radius = 0.275, straightH = 1.38;
+      addBoxTo(bodyGroup, -radius, -0.82, -0.015, radius, -0.82 + straightH, 0.015, blackFrameMat);
+      addBoxTo(bodyGroup, -(radius - 0.014), -0.806, 0.012, (radius - 0.014), -0.82 + straightH, 0.017, glassMat);
+
+      const archFrame = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, 0.03, 48, 1, false, 0, Math.PI), blackFrameMat);
+      archFrame.rotation.z = Math.PI / 2; archFrame.rotation.y = Math.PI / 2;
+      archFrame.position.set(0, -0.82 + straightH, 0);
+      bodyGroup.add(archFrame);
+
+      const archGlass = new THREE.Mesh(new THREE.CylinderGeometry(radius - 0.014, radius - 0.014, 0.006, 48, 1, false, 0, Math.PI), glassMat);
+      archGlass.rotation.z = Math.PI / 2; archGlass.rotation.y = Math.PI / 2;
+      archGlass.position.set(0, -0.82 + straightH, 0.014);
+      bodyGroup.add(archGlass);
+
+      const standGroup = new THREE.Group();
+      standGroup.position.set(0, 0.15, -0.015);
+      standGroup.rotation.x = 0.26;
+      group.add(standGroup);
+      addBoxTo(standGroup, -0.18, -0.95, -0.01, -0.16, 0.0, 0.01, backMat);
+      addBoxTo(standGroup,  0.16, -0.95, -0.01,  0.18, 0.0, 0.01, backMat);
+      addBoxTo(standGroup, -0.18, -0.95, -0.01,  0.18, -0.93, 0.01, backMat);
+      return group;
+    }
+
+    function createBed() {
+      const group = new THREE.Group();
+      group.name = "Kapitoneli Yatak";
+      group.userData.id = "bed";
+      const creamLeatherMat = new THREE.MeshStandardMaterial({ color: 0xe6dec8, roughness: 0.45, metalness: 0.05 });
+      const buttonMat = new THREE.MeshStandardMaterial({ color: 0xb8af99, roughness: 0.4, metalness: 0.2 });
+      const sheetMat = new THREE.MeshStandardMaterial({ color: 0xf4f1ea, roughness: 0.7, metalness: 0.0 });
+      const yellowDuvetMat = new THREE.MeshStandardMaterial({ color: 0xd4b24c, roughness: 0.65, metalness: 0.02 });
+      const legMat = new THREE.MeshStandardMaterial({ color: 0xc5c8cc, roughness: 0.3, metalness: 0.8 });
+
+      addBoxTo(group, -0.73, 0.0, -0.98, -0.68, 0.06, -0.93, legMat);
+      addBoxTo(group,  0.68, 0.0, -0.98,  0.73, 0.06, -0.93, legMat);
+      addBoxTo(group, -0.73, 0.0,  0.93, -0.68, 0.06,  0.98, legMat);
+      addBoxTo(group,  0.68, 0.0,  0.93,  0.73, 0.06,  0.98, legMat);
+
+      addBoxTo(group, -0.75, 0.06, -0.96, 0.75, 0.34, 1.00, creamLeatherMat);
+      addBoxTo(group, -0.78, 0.06, -1.06, 0.78, 1.12, -0.96, creamLeatherMat);
+      addBoxTo(group, -0.70, 0.38, -0.965, 0.70, 1.04, -0.94, creamLeatherMat);
+
+      for (const cx of [-0.55, -0.33, -0.11, 0.11, 0.33, 0.55]) {
+        for (const ry of [0.60, 0.84]) {
+          addBoxTo(group, cx - 0.012, ry - 0.012, -0.942, cx + 0.012, ry + 0.012, -0.932, buttonMat);
+        }
+      }
+      addBoxTo(group, -0.73, 0.34, -0.94, 0.73, 0.54, 0.98, sheetMat);
+      addBoxTo(group, -0.745, 0.37, -0.35, 0.745, 0.565, 0.995, yellowDuvetMat);
+      addBoxTo(group, -0.63, 0.54, -0.88, -0.05, 0.64, -0.48, sheetMat);
+      addBoxTo(group,  0.05, 0.54, -0.88,  0.63, 0.64, -0.48, sheetMat);
+      return group;
+    }
+
+    function createDesk() {
+      const group = new THREE.Group();
+      group.name = "160x60 Çalışma Masası";
+      group.userData.id = "desk";
+      const whiteTopMat = new THREE.MeshStandardMaterial({ color: 0xf3f3f5, roughness: 0.4, metalness: 0.05 });
+      const blackFrameMat = new THREE.MeshStandardMaterial({ color: 0x1e1e21, roughness: 0.4, metalness: 0.6 });
+      const footMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.7, metalness: 0.2 });
+
+      addBoxTo(group, -0.80, 0.725, -0.30, 0.80, 0.75, 0.30, whiteTopMat);
+      addBoxTo(group, -0.77, 0.015, 0.23, -0.73, 0.725, 0.27, blackFrameMat);
+      addBoxTo(group, -0.77, 0.015, -0.27, -0.73, 0.725, -0.23, blackFrameMat);
+      addBoxTo(group, -0.77, 0.04, -0.23, -0.73, 0.08, 0.23, blackFrameMat);
+      addBoxTo(group, -0.77, 0.685, -0.23, -0.73, 0.725, 0.23, blackFrameMat);
+
+      addBoxTo(group, 0.73, 0.015, 0.23, 0.77, 0.725, 0.27, blackFrameMat);
+      addBoxTo(group, 0.73, 0.015, -0.27, 0.77, 0.725, -0.23, blackFrameMat);
+      addBoxTo(group, 0.73, 0.04, -0.23, 0.77, 0.08, 0.23, blackFrameMat);
+      addBoxTo(group, 0.73, 0.685, -0.23, 0.77, 0.725, 0.23, blackFrameMat);
+
+      addBoxTo(group, -0.73, 0.685, 0.23, 0.73, 0.725, 0.27, blackFrameMat);
+      addBoxTo(group, -0.73, 0.685, -0.27, 0.73, 0.725, -0.23, blackFrameMat);
+
+      addBoxTo(group, -0.765, 0.0, 0.235, -0.735, 0.015, 0.265, footMat);
+      addBoxTo(group, -0.765, 0.0, -0.265, -0.735, 0.015, -0.235, footMat);
+      addBoxTo(group, 0.735, 0.0, 0.235, 0.765, 0.015, 0.265, footMat);
+      addBoxTo(group, 0.735, 0.0, -0.265, 0.765, 0.015, -0.235, footMat);
+      return group;
+    }
+
+    function createMSI27() {
+      const monitorGroup = new THREE.Group();
+      monitorGroup.name = "MSI 27 inç (Ana Monitör)";
+      const standHeadGroup = new THREE.Group();
+      standHeadGroup.position.set(0, 0.31, -0.045);
+      monitorGroup.add(standHeadGroup);
+      const panelGroup = new THREE.Group();
+      standHeadGroup.add(panelGroup);
+
+      const blackPlasticMat = new THREE.MeshStandardMaterial({ color: 0x161619, roughness: 0.5, metalness: 0.18 });
+      const darkMetalMat = new THREE.MeshStandardMaterial({ color: 0x202025, roughness: 0.35, metalness: 0.65 });
+      const offScreenMat = new THREE.MeshStandardMaterial({ color: 0x050507, roughness: 0.2, metalness: 0.08 });
+      const offLedMat = new THREE.MeshStandardMaterial({ color: 0x2a2a2e, roughness: 0.5 });
+
+      addBoxTo(monitorGroup, -0.075, 0.0, -0.105, 0.075, 0.008, -0.015, darkMetalMat);
+      addBoxTo(monitorGroup, -0.030, 0.008, -0.085, 0.030, 0.385, -0.048, blackPlasticMat);
+      addBoxTo(standHeadGroup, -0.048, -0.032, 0.000, 0.048, 0.032, 0.028, blackPlasticMat);
+
+      addBoxTo(panelGroup, -0.307, -0.181, 0.035, 0.307, 0.181, 0.053, blackPlasticMat);
+      addBoxTo(panelGroup, -0.215, -0.130, 0.022, 0.215, 0.115, 0.035, blackPlasticMat);
+      addBoxTo(panelGroup, -0.301, -0.158, 0.053, 0.301, 0.175, 0.055, offScreenMat);
+      addBoxTo(panelGroup, -0.307, 0.175, 0.053, 0.307, 0.181, 0.056, blackPlasticMat);
+      addBoxTo(panelGroup, -0.307, -0.158, 0.053, -0.301, 0.175, 0.056, blackPlasticMat);
+      addBoxTo(panelGroup,  0.301, -0.158, 0.053,  0.307, 0.175, 0.056, blackPlasticMat);
+      addBoxTo(panelGroup, -0.307, -0.181, 0.053, 0.307, -0.158, 0.057, blackPlasticMat);
+      addBoxTo(panelGroup, 0.270, -0.179, 0.057, 0.277, -0.177, 0.0585, offLedMat);
+
+      monitorGroup.userData = { id: "monitor_main", isMonitor: true, baseHeight: 0.31, standHeadGroup, panelGroup };
+      return monitorGroup;
+    }
+
+    function createAOC24G2SPU() {
+      const monitorGroup = new THREE.Group();
+      monitorGroup.name = "AOC 24G2SPU (Sol Monitör)";
+      const standHeadGroup = new THREE.Group();
+      standHeadGroup.position.set(0, 0.285, -0.045);
+      monitorGroup.add(standHeadGroup);
+      const panelGroup = new THREE.Group();
+      standHeadGroup.add(panelGroup);
+
+      const blackPlasticMat = new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.55, metalness: 0.15 });
+      const darkMetalMat = new THREE.MeshStandardMaterial({ color: 0x222226, roughness: 0.35, metalness: 0.6 });
+      const aocRedMat = new THREE.MeshStandardMaterial({ color: 0xc81020, roughness: 0.4, metalness: 0.2 });
+      const offScreenMat = new THREE.MeshStandardMaterial({ color: 0x050507, roughness: 0.22, metalness: 0.08 });
+      const offLedMat = new THREE.MeshStandardMaterial({ color: 0x2a2a2e, roughness: 0.5 });
+
+      addBoxTo(monitorGroup, -0.068, 0.0, -0.100, 0.068, 0.008, -0.020, darkMetalMat);
+      addBoxTo(monitorGroup, -0.028, 0.008, -0.082, 0.028, 0.365, -0.045, blackPlasticMat);
+      addBoxTo(monitorGroup, -0.006, 0.160, -0.084, 0.006, 0.355, -0.082, aocRedMat);
+      addBoxTo(monitorGroup, -0.028, 0.365, -0.082, 0.028, 0.372, -0.045, aocRedMat);
+      addBoxTo(standHeadGroup, -0.045, -0.030, 0.000, 0.045, 0.030, 0.027, blackPlasticMat);
+
+      addBoxTo(panelGroup, -0.2695, -0.165, 0.035, 0.2695, 0.157, 0.053, blackPlasticMat);
+      addBoxTo(panelGroup, -0.185, -0.120, 0.023, 0.185, 0.100, 0.035, blackPlasticMat);
+      addBoxTo(panelGroup, -0.245, 0.045, 0.033, -0.090, 0.052, 0.035, aocRedMat);
+      addBoxTo(panelGroup,  0.090, 0.045, 0.033,  0.245, 0.052, 0.035, aocRedMat);
+      addBoxTo(panelGroup, -0.215, -0.065, 0.033, -0.090, -0.059, 0.035, aocRedMat);
+      addBoxTo(panelGroup,  0.090, -0.065, 0.033,  0.215, -0.059, 0.035, aocRedMat);
+
+      addBoxTo(panelGroup, -0.264, -0.143, 0.053, 0.264, 0.152, 0.055, offScreenMat);
+      addBoxTo(panelGroup, -0.2695, 0.152, 0.053, 0.2695, 0.157, 0.056, blackPlasticMat);
+      addBoxTo(panelGroup, -0.2695, -0.143, 0.053, -0.264, 0.152, 0.056, blackPlasticMat);
+      addBoxTo(panelGroup,  0.264, -0.143, 0.053, 0.2695, 0.152, 0.056, blackPlasticMat);
+      addBoxTo(panelGroup, -0.2695, -0.165, 0.053, 0.2695, -0.143, 0.057, blackPlasticMat);
+      addBoxTo(panelGroup, -0.225, -0.161, 0.057, 0.225, -0.156, 0.0585, aocRedMat);
+      addBoxTo(panelGroup, 0.235, -0.164, 0.057, 0.242, -0.162, 0.0585, offLedMat);
+
+      monitorGroup.userData = { id: "monitor_sub", isMonitor: true, baseHeight: 0.285, standHeadGroup, panelGroup };
+      return monitorGroup;
+    }
+
+    function createOfficeChair() {
+      const group = new THREE.Group();
+      group.name = "Ofis / Oyuncu Koltuğu";
+      group.userData.id = "chair";
+      const blackFabricMat = new THREE.MeshStandardMaterial({ color: 0x18181c, roughness: 0.75, metalness: 0.05 });
+      const blackPlasticMat = new THREE.MeshStandardMaterial({ color: 0x121215, roughness: 0.4, metalness: 0.2 });
+      const chromeMat = new THREE.MeshStandardMaterial({ color: 0x9fa4ab, roughness: 0.25, metalness: 0.8 });
+
+      const cylinder = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.028, 0.38, 16), blackPlasticMat);
+      cylinder.position.set(0, 0.24, 0);
+      group.add(cylinder);
+
+      for (let i = 0; i < 5; i++) {
+        const legGroup = new THREE.Group();
+        legGroup.rotation.y = (i * Math.PI * 2) / 5;
+        group.add(legGroup);
+        addBoxTo(legGroup, -0.018, 0.045, 0.0, 0.018, 0.075, 0.31, chromeMat);
+        addBoxTo(legGroup, -0.022, 0.0, 0.27, 0.022, 0.045, 0.315, blackPlasticMat);
+      }
+
+      addBoxTo(group, -0.24, 0.42, -0.22, 0.24, 0.49, 0.24, blackFabricMat);
+      addBoxTo(group, -0.27, 0.45, -0.10, -0.24, 0.65, -0.05, blackPlasticMat);
+      addBoxTo(group, -0.27, 0.63, -0.18, -0.23, 0.665, 0.14, blackPlasticMat);
+      addBoxTo(group, -0.27, 0.45,  0.10, -0.24, 0.63,  0.14, blackPlasticMat);
+      addBoxTo(group,  0.24, 0.45, -0.10,  0.27, 0.65, -0.05, blackPlasticMat);
+      addBoxTo(group,  0.23, 0.63, -0.18,  0.27, 0.665, 0.14, blackPlasticMat);
+      addBoxTo(group,  0.24, 0.45,  0.10,  0.27, 0.63,  0.14, blackPlasticMat);
+
+      const backGroup = new THREE.Group();
+      backGroup.position.set(0, 0.46, -0.20);
+      backGroup.rotation.x = -0.14;
+      group.add(backGroup);
+      addBoxTo(backGroup, -0.225, 0.0, -0.03, 0.225, 0.62, 0.02, blackFabricMat);
+      addBoxTo(backGroup, -0.16, 0.62, -0.025, 0.16, 0.78, 0.035, blackFabricMat);
+      return group;
+    }
+
+    function createWoodCabinet() {
+      const group = new THREE.Group();
+      group.name = "Küçük 2'li Ahşap Dolap";
+      group.userData.id = "cabinet";
+      const woodMat = new THREE.MeshStandardMaterial({ color: 0xc28d53, roughness: 0.5, metalness: 0.05 });
+      const darkWoodMat = new THREE.MeshStandardMaterial({ color: 0x8f6232, roughness: 0.6 });
+      const frostedGlassMat = new THREE.MeshStandardMaterial({ color: 0xcad6d9, roughness: 0.25, metalness: 0.2, transparent: true, opacity: 0.72 });
+      const wheelMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.5 });
+
+      addBoxTo(group, -0.33, 0.0, -0.17, -0.28, 0.04, -0.12, wheelMat);
+      addBoxTo(group,  0.28, 0.0, -0.17,  0.33, 0.04, -0.12, wheelMat);
+      addBoxTo(group, -0.33, 0.0,  0.12, -0.28, 0.04,  0.17, wheelMat);
+      addBoxTo(group,  0.28, 0.0,  0.12,  0.33, 0.04,  0.17, wheelMat);
+
+      addBoxTo(group, -0.35, 0.04, -0.19, 0.35, 0.85, 0.17, woodMat);
+      addBoxTo(group, -0.32, 0.30, -0.16, 0.32, 0.32, 0.165, darkWoodMat);
+      addBoxTo(group, -0.32, 0.56, -0.16, 0.32, 0.58, 0.165, darkWoodMat);
+      addBoxTo(group, -0.345, 0.06, 0.17, -0.005, 0.83, 0.188, woodMat);
+      addBoxTo(group, -0.285, 0.12, 0.175, -0.065, 0.77, 0.192, frostedGlassMat);
+      addBoxTo(group,  0.005, 0.06, 0.17,  0.345, 0.83, 0.188, woodMat);
+      addBoxTo(group,  0.065, 0.12, 0.175,  0.285, 0.77, 0.192, frostedGlassMat);
+      return group;
+    }
+
+    function createPCCase() {
+      const group = new THREE.Group();
+      group.name = "RGB Oyuncu Kasası";
+      group.userData.id = "pc_case";
+      const blackCaseMat = new THREE.MeshStandardMaterial({ color: 0x141417, roughness: 0.4, metalness: 0.5 });
+      const glassSideMat = new THREE.MeshStandardMaterial({ color: 0x1f242d, roughness: 0.1, metalness: 0.8 });
+      const fanGlowMat = new THREE.MeshBasicMaterial({ color: 0xd8d4ff });
+      const fanCenterMat = new THREE.MeshStandardMaterial({ color: 0x222228, roughness: 0.4 });
+
+      addBoxTo(group, -0.105, 0.015, -0.21, 0.105, 0.46, 0.21, blackCaseMat);
+      addBoxTo(group, -0.095, 0.0, -0.19, -0.065, 0.015, -0.14, blackCaseMat);
+      addBoxTo(group,  0.065, 0.0, -0.19,  0.095, 0.015, -0.14, blackCaseMat);
+      addBoxTo(group, -0.095, 0.0,  0.14, -0.065, 0.015,  0.19, blackCaseMat);
+      addBoxTo(group,  0.065, 0.0,  0.14,  0.095, 0.015,  0.19, blackCaseMat);
+      addBoxTo(group, -0.108, 0.03, -0.19, -0.104, 0.44, 0.19, glassSideMat);
+
+      for (const y of [0.10, 0.23, 0.36]) {
+        const ring = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.008, 24), fanGlowMat);
+        ring.rotation.x = Math.PI / 2; ring.position.set(0, y, 0.211);
+        group.add(ring);
+        const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.012, 16), fanCenterMat);
+        hub.rotation.x = Math.PI / 2; hub.position.set(0, y, 0.212);
+        group.add(hub);
+      }
+      return group;
+    }
+
+    let isFloorLampOn = true;
+    let lampPointLight, lampBulbMesh, lampShadeMat;
+
+    function createTripodLamp() {
+      const group = new THREE.Group();
+      group.name = "Üç Ayaklı Abajur";
+      group.userData.id = "floor_lamp";
+
+      const darkWoodMat = new THREE.MeshStandardMaterial({ color: 0x422a1a, roughness: 0.55, metalness: 0.05 });
+      const blackMetalMat = new THREE.MeshStandardMaterial({ color: 0x1a1a1f, roughness: 0.4, metalness: 0.6 });
+      lampShadeMat = new THREE.MeshStandardMaterial({
+        color: 0x1c1c21, emissive: 0xff9d3b, emissiveIntensity: 0.22,
+        roughness: 0.65, metalness: 0.05, side: THREE.DoubleSide
+      });
+
+      const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, 0.05, 24), blackMetalMat);
+      hub.position.set(0, 1.18, 0);
+      group.add(hub);
+
+      const topY = 1.18, topR = 0.022, bottomR = 0.26;
+      const dx = bottomR - topR, dy = topY;
+      const legLen = Math.sqrt(dx * dx + dy * dy);
+      const tiltAngle = Math.atan2(dx, dy);
+
+      for (let i = 0; i < 3; i++) {
+        const yawGroup = new THREE.Group();
+        yawGroup.position.set(0, topY, 0);
+        yawGroup.rotation.y = (i * Math.PI * 2) / 3;
+        group.add(yawGroup);
+        const tiltGroup = new THREE.Group();
+        tiltGroup.position.set(0, 0, topR);
+        tiltGroup.rotation.x = tiltAngle;
+        yawGroup.add(tiltGroup);
+        addBoxTo(tiltGroup, -0.015, -legLen, -0.015, 0.015, 0.0, 0.015, darkWoodMat);
+      }
+
+      const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.16, 16), blackMetalMat);
+      neck.position.set(0, 1.26, 0);
+      group.add(neck);
+
+      lampBulbMesh = new THREE.Mesh(new THREE.SphereGeometry(0.045, 16, 16), new THREE.MeshBasicMaterial({ color: 0xffe4a0 }));
+      lampBulbMesh.position.set(0, 1.35, 0);
+      group.add(lampBulbMesh);
+
+      lampPointLight = new THREE.PointLight(0xffaa44, 1.8, 4.5, 1.5);
+      lampPointLight.position.set(0, 1.35, 0);
+      lampPointLight.castShadow = true;
+      group.add(lampPointLight);
+
+      const shade = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.28, 36, 1, true), lampShadeMat);
+      shade.position.set(0, 1.36, 0);
+      shade.userData.isLampShade = true;
+      group.add(shade);
+
+      return group;
+    }
+
+    // EŞYALARI SAHNEYE EKLE
+    const bed = createBed();
+    const wardrobe = createWardrobe();
+    const dresser = createDresser();
+    const mirror = createArchedMirror();
+    const cabinet = createWoodCabinet();
+    const desk = createDesk();
+    const monitorMain = createMSI27();
+    const monitorSub = createAOC24G2SPU();
+    const pcCase = createPCCase();
+    const chair = createOfficeChair();
+    const lamp = createTripodLamp();
+
+    const draggableRoots = [
+      desk, monitorMain, monitorSub, pcCase, chair,
+      cabinet, lamp, bed, wardrobe, dresser, mirror
+    ];
+    draggableRoots.forEach(o => scene.add(o));
+
+    const DEFAULT_LAYOUT = {
+      bed:         { x: -0.70, y: 0,    z: -1.20, rotY: Math.PI / 2, locked: false },
+      wardrobe:    { x:  1.46, y: 0,    z: -1.35, rotY: -Math.PI / 2, locked: false },
+      dresser:     { x:  1.51, y: 0,    z: -0.30, rotY: -Math.PI / 2, locked: false },
+      mirror:      { x:  1.48, y: 0,    z:  0.48, rotY: -Math.PI / 2 + 0.18, locked: false },
+      cabinet:     { x: -1.38, y: 0,    z:  1.78, rotY: Math.PI, locked: false },
+      desk:        { x: -0.20, y: 0,    z:  1.66, rotY: Math.PI, locked: false },
+      monitor_main:{ x: -0.38, y: 0.75, z:  1.76, rotY: Math.PI, locked: false },
+      monitor_sub: { x:  0.22, y: 0.75, z:  1.72, rotY: Math.PI - 0.22, locked: false },
+      pc_case:     { x: -0.82, y: 0,    z:  1.66, rotY: Math.PI, locked: false },
+      chair:       { x: -0.20, y: 0,    z:  0.95, rotY: 0.25, locked: false },
+      floor_lamp:  { x: -1.35, y: 0,    z:  1.05, rotY: 0, locked: false }
+    };
+
+    function applyLayoutMap(layoutMap) {
+      draggableRoots.forEach(obj => {
+        const id = obj.userData.id;
+        const cfg = layoutMap[id] || DEFAULT_LAYOUT[id];
+        if (cfg) {
+          obj.position.set(cfg.x, cfg.y ?? obj.position.y, cfg.z);
+          obj.rotation.y = cfg.rotY ?? 0;
+          obj.userData.locked = !!cfg.locked;
+        }
+      });
+    }
+
+    function saveLayout() {
+      const data = { isGlobalLocked, items: {} };
+      draggableRoots.forEach(obj => {
+        data.items[obj.userData.id] = {
+          x: Number(obj.position.x.toFixed(3)),
+          y: Number(obj.position.y.toFixed(3)),
+          z: Number(obj.position.z.toFixed(3)),
+          rotY: Number(obj.rotation.y.toFixed(3)),
+          locked: !!obj.userData.locked
+        };
+      });
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch (_) {}
+      notifyFlutter({ type: 'layout_saved', data });
+    }
+
+    function loadSavedLayout() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && parsed.items) {
+            if (typeof parsed.isGlobalLocked === 'boolean') {
+              isGlobalLocked = parsed.isGlobalLocked;
+            }
+            applyLayoutMap(parsed.items);
+            return;
+          }
+        }
+      } catch (_) {}
+      applyLayoutMap(DEFAULT_LAYOUT);
+    }
+
+    loadSavedLayout();
+
+    // IŞIK & KAPI KONTROLLERİ (Flutter Köprülü)
+    function setCeilingLight(state, fromFlutter = false) {
+      isCeilingLightOn = state;
+      ceilingPointLight.intensity = isCeilingLightOn ? 3.2 : 0.0;
+      ceilingBulbMat.emissiveIntensity = isCeilingLightOn ? 1.4 : 0.0;
+      ceilingBulbMat.color.setHex(isCeilingLightOn ? 0xfff6dc : 0x555860);
+
+      const btn = document.getElementById('btnCeilingLight');
+      btn.classList.toggle('light-on', isCeilingLightOn);
+
+      if (!fromFlutter) {
+        notifyFlutter({ type: 'light_toggle', fixture: 'ceiling_light', isOn: isCeilingLightOn });
+      }
+    }
+
+    function setFloorLamp(state, fromFlutter = false) {
+      isFloorLampOn = state;
+      lampPointLight.intensity = isFloorLampOn ? 1.8 : 0.0;
+      lampShadeMat.emissiveIntensity = isFloorLampOn ? 0.22 : 0.0;
+      lampBulbMesh.material.color.setHex(isFloorLampOn ? 0xffe4a0 : 0x44444a);
+
+      const btn = document.getElementById('btnFloorLamp');
+      btn.classList.toggle('light-on', isFloorLampOn);
+
+      if (!fromFlutter) {
+        notifyFlutter({ type: 'light_toggle', fixture: 'floor_lamp', isOn: isFloorLampOn });
+      }
+    }
+
+    function toggleDoor() {
+      doorPivot.userData.isOpen = !doorPivot.userData.isOpen;
+      doorPivot.rotation.y = doorPivot.userData.isOpen ? 1.25 : 0.0;
+    }
+
+    document.getElementById('btnCeilingLight').addEventListener('click', () => setCeilingLight(!isCeilingLightOn));
+    document.getElementById('btnFloorLamp').addEventListener('click', () => setFloorLamp(!isFloorLampOn));
+    document.getElementById('btnDoorToggle').addEventListener('click', toggleDoor);
+
+    // KİLİT & PANEL YÖNETİMİ
+    let selectedObject = desk;
+    const itemListEl = document.getElementById('itemList');
+    const itemButtons = new Map();
+    const itemLockButtons = new Map();
+
+    function updateGlobalLockUI() {
+      const btn = document.getElementById('btnGlobalLock');
+      if (isGlobalLocked) {
+        btn.textContent = '🔒 Eşyalar Kilitli';
+        btn.className = 'top-btn locked';
+      } else {
+        btn.textContent = '🔓 Taşıma Açık';
+        btn.className = 'top-btn unlocked';
+      }
+    }
+
+    function updateItemLockUI(obj) {
+      const lBtn = itemLockButtons.get(obj);
+      const locked = !!obj.userData.locked;
+      if (lBtn) {
+        lBtn.textContent = locked ? '🔒' : '🔓';
+        lBtn.classList.toggle('is-locked', locked);
+      }
+      if (selectedObject === obj) {
+        const selLockBtn = document.getElementById('btnLockSelected');
+        selLockBtn.textContent = locked ? '🔒 Kilitli' : '🔓 Kilitle';
+        selLockBtn.classList.toggle('is-locked', locked);
+      }
+    }
+
+    document.getElementById('btnGlobalLock').addEventListener('click', () => {
+      isGlobalLocked = !isGlobalLocked;
+      updateGlobalLockUI();
+      saveLayout();
+      showToast(isGlobalLocked ? 'Tüm eşyaların yeri kilitlendi' : 'Eşya taşıma kilidi açıldı');
+    });
+
+    document.getElementById('btnTogglePanel').addEventListener('click', () => {
+      isEditPanelOpen = !isEditPanelOpen;
+      document.getElementById('items-panel').classList.toggle('open', isEditPanelOpen);
+      document.getElementById('controls-ui').classList.toggle('open', isEditPanelOpen);
+    });
+
+    document.getElementById('btnResetLayout').addEventListener('click', () => {
+      applyLayoutMap(DEFAULT_LAYOUT);
+      draggableRoots.forEach(o => updateItemLockUI(o));
+      updateCoordDisplay();
+      saveLayout();
+      showToast('Varsayılan oda düzenine dönüldü');
+    });
+
+    document.getElementById('btnLockSelected').addEventListener('click', () => {
+      if (!selectedObject) return;
+      selectedObject.userData.locked = !selectedObject.userData.locked;
+      updateItemLockUI(selectedObject);
+      saveLayout();
+      showToast(selectedObject.userData.locked
+        ? `${selectedObject.name} kilitlendi`
+        : `${selectedObject.name} kilidi açıldı`);
+    });
+
+    function selectItem(obj) {
+      selectedObject = obj;
+      document.getElementById('selectedName').textContent = obj.name;
+      document.getElementById('objRotY').value = obj.rotation.y;
+      updateCoordDisplay();
+      updateItemLockUI(obj);
+
+      itemButtons.forEach((btn, keyObj) => {
+        btn.classList.toggle('active', keyObj === obj);
+      });
+
+      const monExtra = document.getElementById('monitorExtra');
+      if (obj.userData && obj.userData.isMonitor) {
+        monExtra.style.display = 'flex';
+        document.getElementById('heightY').value = obj.userData.standHeadGroup.position.y - obj.userData.baseHeight;
+        document.getElementById('swivelY').value = obj.userData.standHeadGroup.rotation.y;
+        document.getElementById('tiltX').value = obj.userData.panelGroup.rotation.x;
+      } else {
+        monExtra.style.display = 'none';
+      }
+    }
+
+    draggableRoots.forEach((obj) => {
+      const row = document.createElement('div');
+      row.className = 'item-row';
+
+      const btn = document.createElement('button');
+      btn.className = 'item-btn';
+      btn.textContent = obj.name;
+      btn.addEventListener('click', () => selectItem(obj));
+
+      const lockBtn = document.createElement('button');
+      lockBtn.className = 'item-lock-btn';
+      lockBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        obj.userData.locked = !obj.userData.locked;
+        updateItemLockUI(obj);
+        saveLayout();
+      });
+
+      row.appendChild(btn);
+      row.appendChild(lockBtn);
+      itemListEl.appendChild(row);
+      itemButtons.set(obj, btn);
+      itemLockButtons.set(obj, lockBtn);
+      updateItemLockUI(obj);
+    });
+
+    function updateCoordDisplay() {
+      if (!selectedObject) return;
+      const deg = Math.round(THREE.MathUtils.radToDeg(selectedObject.rotation.y));
+      document.getElementById('coordDisplay').textContent =
+        `Konum: X: ${selectedObject.position.x.toFixed(2)}m | Z: ${selectedObject.position.z.toFixed(2)}m | Yön: ${deg}°`;
+    }
+
+    updateGlobalLockUI();
+    selectItem(desk);
+
+    // RAYCASTER (IŞIK TIKLAMA & EŞYA SÜRÜKLEME)
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+    const dragPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    const intersectPoint = new THREE.Vector3();
+    const dragOffset = new THREE.Vector3();
+    let isDragging = false;
+    let pointerDownPos = new THREE.Vector2();
+    let clickedLampShade = false;
+
+    function getDraggableRoot(obj) {
+      while (obj) {
+        if (draggableRoots.includes(obj)) return obj;
+        obj = obj.parent;
+      }
+      return null;
+    }
+
+    window.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('#top-bar') || e.target.closest('#controls-ui') || e.target.closest('#items-panel')) return;
+
+      pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
+      pointer.y = -(e.clientY / window.innerHeight) * 2 + 1;
+      pointerDownPos.set(e.clientX, e.clientY);
+      clickedLampShade = false;
+
+      raycaster.setFromCamera(pointer, camera);
+
+      // 1. Tavan Lambası tıklaması (Kilitli olsa bile her zaman çalışır)
+      const ceilingHits = raycaster.intersectObjects(ceilingLightGroup.children, true);
+      if (ceilingHits.length > 0) {
+        setCeilingLight(!isCeilingLightOn);
+        return;
+      }
+
+      // 2. Kapı tıklaması
+      const doorHits = raycaster.intersectObjects(doorPivot.children, true);
+      if (doorHits.length > 0) {
+        toggleDoor();
+        return;
+      }
+
+      // 3. Eşyalara tıklama
+      const intersects = raycaster.intersectObjects(draggableRoots, true);
+      if (intersects.length > 0) {
+        const hitMesh = intersects[0].object;
+        if (hitMesh.userData && hitMesh.userData.isLampShade) {
+          clickedLampShade = true;
+        }
+        const rootObj = getDraggableRoot(hitMesh);
+        if (rootObj) {
+          selectItem(rootObj);
+          // Eğer genel kilit veya eşyanın kendi kilidi açıksa sürüklemeye izin ver
+          if (!isGlobalLocked && !rootObj.userData.locked) {
+            isDragging = true;
+            controls.enabled = false;
+            dragPlane.constant = -selectedObject.position.y;
+            if (raycaster.ray.intersectPlane(dragPlane, intersectPoint)) {
+              dragOffset.subVectors(selectedObject.position, intersectPoint);
+            }
+          }
+        }
+      }
+    });
+
+    window.addEventListener('pointermove', (e) => {
+      if (!isDragging || !selectedObject) return;
+      pointer.x = (e.clientX / window.innerWidth) * 2 - 1;
+      pointer.y = -(e.clientY / window.innerHeight) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+
+      if (raycaster.ray.intersectPlane(dragPlane, intersectPoint)) {
+        const halfW = ROOM_W / 2 - 0.15;
+        const halfD = ROOM_D / 2 - 0.15;
+        const newX = THREE.MathUtils.clamp(intersectPoint.x + dragOffset.x, -halfW, halfW);
+        const newZ = THREE.MathUtils.clamp(intersectPoint.z + dragOffset.z, -halfD, halfD);
+        const dx = newX - selectedObject.position.x;
+        const dz = newZ - selectedObject.position.z;
+
+        selectedObject.position.x = newX;
+        selectedObject.position.z = newZ;
+
+        if (selectedObject === desk) {
+          monitorMain.position.x += dx; monitorMain.position.z += dz;
+          monitorSub.position.x += dx;  monitorSub.position.z += dz;
+          pcCase.position.x += dx;      pcCase.position.z += dz;
+        }
+        updateCoordDisplay();
+      }
+    });
+
+    window.addEventListener('pointerup', (e) => {
+      const moveDist = Math.hypot(e.clientX - pointerDownPos.x, e.clientY - pointerDownPos.y);
+      if (clickedLampShade && moveDist < 6) {
+        setFloorLamp(!isFloorLampOn);
+      }
+      if (isDragging) {
+        isDragging = false;
+        controls.enabled = true;
+        saveLayout();
+      }
+    });
+
+    function rotateSelected(newRotY) {
+      if (!selectedObject) return;
+      if (isGlobalLocked || selectedObject.userData.locked) {
+        showToast('Döndürmek için önce eşya kilidini açın');
+        document.getElementById('objRotY').value = selectedObject.rotation.y;
+        return;
+      }
+      const deltaRot = newRotY - selectedObject.rotation.y;
+      selectedObject.rotation.y = newRotY;
+
+      if (selectedObject === desk) {
+        [monitorMain, monitorSub, pcCase].forEach((childObj) => {
+          const relX = childObj.position.x - desk.position.x;
+          const relZ = childObj.position.z - desk.position.z;
+          const cos = Math.cos(deltaRot), sin = Math.sin(deltaRot);
+          childObj.position.x = desk.position.x + (relX * cos + relZ * sin);
+          childObj.position.z = desk.position.z + (-relX * sin + relZ * cos);
+          childObj.rotation.y += deltaRot;
+        });
+      }
+      document.getElementById('objRotY').value = selectedObject.rotation.y;
+      updateCoordDisplay();
+      saveLayout();
+    }
+
+    document.getElementById('objRotY').addEventListener('input', (e) => rotateSelected(parseFloat(e.target.value)));
+    document.getElementById('rotLeft90').addEventListener('click', () => {
+      let next = selectedObject.rotation.y - Math.PI / 2;
+      if (next < -Math.PI) next += Math.PI * 2;
+      rotateSelected(next);
+    });
+    document.getElementById('rotRight90').addEventListener('click', () => {
+      let next = selectedObject.rotation.y + Math.PI / 2;
+      if (next > Math.PI) next -= Math.PI * 2;
+      rotateSelected(next);
+    });
+    document.getElementById('rotZero').addEventListener('click', () => rotateSelected(0));
+
+    document.getElementById('heightY').addEventListener('input', (e) => {
+      if (selectedObject && selectedObject.userData.isMonitor && !isGlobalLocked && !selectedObject.userData.locked) {
+        selectedObject.userData.standHeadGroup.position.y = selectedObject.userData.baseHeight + parseFloat(e.target.value);
+      }
+    });
+    document.getElementById('swivelY').addEventListener('input', (e) => {
+      if (selectedObject && selectedObject.userData.isMonitor && !isGlobalLocked && !selectedObject.userData.locked) {
+        selectedObject.userData.standHeadGroup.rotation.y = parseFloat(e.target.value);
+      }
+    });
+    document.getElementById('tiltX').addEventListener('input', (e) => {
+      if (selectedObject && selectedObject.userData.isMonitor && !isGlobalLocked && !selectedObject.userData.locked) {
+        selectedObject.userData.panelGroup.rotation.x = parseFloat(e.target.value);
+      }
+    });
+
+    // FLUTTER TARAFINDAN ÇAĞRILABİLEN GLOBAL FONKSİYONLAR
+    window.syncFromFlutter = function(config) {
+      if (!config) return;
+      if (typeof config.ceilingOn === 'boolean') setCeilingLight(config.ceilingOn, true);
+      if (typeof config.floorLampOn === 'boolean') setFloorLamp(config.floorLampOn, true);
+      if (typeof config.isHeating === 'boolean') {
+        radiatorMat.emissive = new THREE.Color(config.isHeating ? 0xff4500 : 0x000000);
+        radiatorMat.emissiveIntensity = config.isHeating ? 0.35 : 0.0;
+      }
+      if (config.savedLayout && config.savedLayout.items) {
+        isGlobalLocked = config.savedLayout.isGlobalLocked ?? true;
+        applyLayoutMap(config.savedLayout.items);
+        draggableRoots.forEach(o => updateItemLockUI(o));
+        updateGlobalLockUI();
+      }
+    };
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    function animate() {
+      requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    animate();
+  </script>
+</body>
+</html>

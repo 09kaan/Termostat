@@ -7,7 +7,9 @@ import 'package:firebase_database/firebase_database.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/thermostat_provider.dart';
+import '../models/heating_feedback.dart';
 import '../widgets/room_overview.dart';
+import '../widgets/bedroom_3d_card.dart';
 import '../widgets/home_floor_plan.dart';
 import '../widgets/home_pager.dart';
 import '../models/home_plan.dart';
@@ -898,6 +900,184 @@ class WizLightsScreenState extends State<WizLightsScreen> {
     if (id != null) _openControls(id);
   }
 
+  bool _isBedroomRoom(RoomSpec room) {
+    final rId = room.id.toLowerCase();
+    final rName = room.name.toLowerCase();
+    return rId.contains('bed') ||
+        rId.contains('yatak') ||
+        rName.contains('yatak');
+  }
+
+  Widget _buildBedroom3DOverview({
+    required RoomSpec room,
+    required List<FixtureSpec> fixtures,
+    required String? fixture,
+    required FixtureSpec? selected,
+    required String? id,
+    required FixtureState state,
+    required bool enabled,
+    required Map<String, dynamic> lights,
+    required bool hasReading,
+    required double? temperature,
+    required double? humidity,
+    required bool isHeating,
+  }) {
+    final sortedIds = lights.keys.toList()..sort();
+    final selectableBulbs = <SelectableBedroomBulb>[
+      for (final lightId in sortedIds)
+        SelectableBedroomBulb(
+          id: lightId,
+          name: '${_map(lights[lightId])['name'] ?? lightId} ($lightId)',
+          ip: _map(lights[lightId])['ip']?.toString(),
+        ),
+    ];
+
+    final lightLabel = id == null
+        ? '${room.name.toLowerCase()} · Ampul eşleştirilmedi'
+        : '${_map(lights[id])['name'] ?? 'Ampul'} · ${selected?.type ?? ''}';
+
+    final statusText = state.feedback ??
+        (state.on == true
+            ? 'Ampul bildirimi: Açık'
+            : state.on == false
+                ? 'Ampul bildirimi: Kapalı'
+                : 'Yanıt doğrulanamadı');
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+      children: [
+        Text(
+          '${room.dimensions}${room.area.isNotEmpty ? ' · ${room.area}' : ''} · 3B Etkileşimli Oda',
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+        if (room.sensor) ...[
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 28,
+            runSpacing: 10,
+            children: [
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.thermostat_outlined, size: 22),
+                  const SizedBox(width: 6),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Sıcaklık',
+                          style: Theme.of(context).textTheme.bodySmall),
+                      Text(
+                        hasReading && temperature != null
+                            ? '${temperature.toStringAsFixed(1).replaceAll('.', ',')} °C'
+                            : '-- °C',
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                              fontWeight: FontWeight.bold,
+                            ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.water_drop_outlined, size: 22),
+                  const SizedBox(width: 6),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Nem', style: Theme.of(context).textTheme.bodySmall),
+                      Text(
+                        hasReading && humidity != null
+                            ? '%${humidity.round()}'
+                            : '%--',
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                              fontWeight: FontWeight.bold,
+                            ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Termostat sensörünün son ölçümü',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+        const SizedBox(height: 14),
+        // Boş izometrik ? kutusunun yerini alan 3B Yatak Odası Kartı
+        Bedroom3DCard(
+          height: 340,
+          isHeating: isHeating,
+          initialCeilingOn: state.on ?? true,
+          availableBulbs: selectableBulbs,
+          onTriggerBulb: (bulbId, isOn, fixtureType) async {
+            await _send(bulbId, {'state': isOn});
+          },
+        ),
+        const SizedBox(height: 16),
+        Text(
+          lightLabel,
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Icon(
+              state.on == true
+                  ? Icons.lightbulb
+                  : state.pending
+                      ? Icons.hourglass_top
+                      : Icons.error_outline,
+              size: 18,
+            ),
+            const SizedBox(width: 6),
+            Expanded(child: Text(statusText)),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Text(
+          '3B odada Tavan Lambası veya Abajura dokunarak ışıkları doğrudan açıp kapatabilirsin.',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 10,
+          runSpacing: 8,
+          children: [
+            if (id != null)
+              OutlinedButton.icon(
+                onPressed: () => _openControls(id),
+                icon: const Icon(Icons.tune, size: 18),
+                label: const Text('Işık kontrolleri'),
+              )
+            else
+              OutlinedButton.icon(
+                onPressed: openSettings,
+                icon: const Icon(Icons.link, size: 18),
+                label: const Text('Lambayı eşleştir'),
+              ),
+            if (enabled)
+              FilledButton.tonalIcon(
+                onPressed: () => _togglePlanFixture(fixture!),
+                icon: const Icon(Icons.power_settings_new, size: 18),
+                label: Text(
+                  state.retryable
+                      ? 'Tekrar dene'
+                      : (state.on == true ? 'Kapat' : 'Aç'),
+                ),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+
   Widget _roomOverview(
     Map<String, dynamic> lights,
     Map<String, dynamic> reported,
@@ -949,6 +1129,9 @@ class WizLightsScreenState extends State<WizLightsScreen> {
           sensor != null &&
           !thermostat.isLoading &&
           thermostat.error == null;
+      final isBedroom = _isBedroomRoom(room);
+      final isHeating = thermostat.heatingFeedback.relay == RelayState.on;
+
       child = Column(
         key: ValueKey('detail-$roomId'),
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -991,38 +1174,60 @@ class WizLightsScreenState extends State<WizLightsScreen> {
               ),
             ),
           Expanded(
-            child: RoomOverview(
-              roomName: room.name,
-              dimensions: room.dimensions,
-              area: room.area,
-              roomWidth: room.width,
-              roomDepth: room.depth,
-              showSensor: room.sensor,
-              showLamp: id != null,
-              planAspect: room.width == null || room.depth == null
-                  ? room.bounds.width / room.bounds.height
-                  : null,
-              floorLamp: selected?.floor ?? false,
-              isLightOn: state.on,
-              ambientOn: fixtures.any((f) => states[f.id]?.on == true)
-                  ? true
-                  : state.on,
-              pending: state.pending,
-              commandFeedback: state.feedback,
-              retryCommand: state.retryable,
-              lightName: id == null
-                  ? null
-                  : '${_map(lights[id])['name'] ?? 'Ampul'} · ${selected?.type ?? ''}',
-              onToggle: enabled ? () => _togglePlanFixture(fixture!) : null,
-              onControls: id == null ? null : () => _openControls(id),
-              onSetup: openSettings,
-              temperature: hasReading && sensor.currentTemperature.isFinite
-                  ? sensor.currentTemperature
-                  : null,
-              humidity: hasReading && sensor.humidity.isFinite
-                  ? sensor.humidity
-                  : null,
-            ),
+            child: isBedroom
+                ? _buildBedroom3DOverview(
+                    room: room,
+                    fixtures: fixtures,
+                    fixture: fixture,
+                    selected: selected,
+                    id: id,
+                    state: state,
+                    enabled: enabled,
+                    lights: lights,
+                    hasReading: hasReading,
+                    temperature:
+                        hasReading && sensor.currentTemperature.isFinite
+                            ? sensor.currentTemperature
+                            : null,
+                    humidity: hasReading && sensor.humidity.isFinite
+                        ? sensor.humidity
+                        : null,
+                    isHeating: isHeating,
+                  )
+                : RoomOverview(
+                    roomName: room.name,
+                    dimensions: room.dimensions,
+                    area: room.area,
+                    roomWidth: room.width,
+                    roomDepth: room.depth,
+                    showSensor: room.sensor,
+                    showLamp: id != null,
+                    planAspect: room.width == null || room.depth == null
+                        ? room.bounds.width / room.bounds.height
+                        : null,
+                    floorLamp: selected?.floor ?? false,
+                    isLightOn: state.on,
+                    ambientOn: fixtures.any((f) => states[f.id]?.on == true)
+                        ? true
+                        : state.on,
+                    pending: state.pending,
+                    commandFeedback: state.feedback,
+                    retryCommand: state.retryable,
+                    lightName: id == null
+                        ? null
+                        : '${_map(lights[id])['name'] ?? 'Ampul'} · ${selected?.type ?? ''}',
+                    onToggle:
+                        enabled ? () => _togglePlanFixture(fixture!) : null,
+                    onControls: id == null ? null : () => _openControls(id),
+                    onSetup: openSettings,
+                    temperature:
+                        hasReading && sensor.currentTemperature.isFinite
+                            ? sensor.currentTemperature
+                            : null,
+                    humidity: hasReading && sensor.humidity.isFinite
+                        ? sensor.humidity
+                        : null,
+                  ),
           ),
         ],
       );
@@ -1037,12 +1242,12 @@ class WizLightsScreenState extends State<WizLightsScreen> {
         key: const ValueKey('room-swipe-back'),
         behavior: HitTestBehavior.translucent,
         onHorizontalDragStart:
-            roomId != null && active ? (_) => _roomDrag = 0 : null,
+            roomId != null && ! _selectedRoom.toString().toLowerCase().contains('bed') && ! _selectedRoom.toString().toLowerCase().contains('yatak') && active ? (_) => _roomDrag = 0 : null,
         onHorizontalDragUpdate:
-            roomId != null && active ? (d) => _roomDrag += d.delta.dx : null,
+            roomId != null && ! _selectedRoom.toString().toLowerCase().contains('bed') && ! _selectedRoom.toString().toLowerCase().contains('yatak') && active ? (d) => _roomDrag += d.delta.dx : null,
         onHorizontalDragCancel:
-            roomId != null && active ? () => _roomDrag = 0 : null,
-        onHorizontalDragEnd: roomId != null && active
+            roomId != null && ! _selectedRoom.toString().toLowerCase().contains('bed') && ! _selectedRoom.toString().toLowerCase().contains('yatak') && active ? () => _roomDrag = 0 : null,
+        onHorizontalDragEnd: roomId != null && ! _selectedRoom.toString().toLowerCase().contains('bed') && ! _selectedRoom.toString().toLowerCase().contains('yatak') && active
             ? (d) {
                 if (_roomDrag > 48 || (d.primaryVelocity ?? 0) > 250)
                   _leaveRoom();

@@ -50,7 +50,7 @@ class MorningWeatherNotificationService with WidgetsBindingObserver {
     }
 
     await _scheduleFromCache();
-    await refreshForecastAndSchedule();
+    await refreshForecastAndSchedule(owmApiKey: owmApiKey);
   }
 
   @override
@@ -60,9 +60,11 @@ class MorningWeatherNotificationService with WidgetsBindingObserver {
     }
   }
 
-  Future<void> refreshForecastAndSchedule() async {
+  Future<void> refreshForecastAndSchedule({
+    String owmApiKey = '',
+    bool force = false,
+  }) async {
     try {
-      // API anahtarı gerektirmeyen doğrudan Ankara (39.9334, 32.8597) saatlik tahmin servisi
       final uri = Uri.parse(
         'https://api.open-meteo.com/v1/forecast?latitude=39.9334&longitude=32.8597&hourly=temperature_2m,precipitation_probability&timezone=Europe%2FIstanbul&forecast_days=5',
       );

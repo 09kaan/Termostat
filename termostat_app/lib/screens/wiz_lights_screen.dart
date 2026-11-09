@@ -126,6 +126,8 @@ class WizLightsScreenState extends State<WizLightsScreen> {
         const RoomDetailNotification(false).dispatch(context);
     });
     if (user != null) _loadPlan(user.uid, binding);
+    // Native Firebase onValue is a single-subscription stream. Subscribe ONCE
+    // and share the last snapshot with the room and any number of panels.
     _homeSubscription = _home?.onValue.listen(
       (event) {
         if (!mounted || binding != _binding) return;
@@ -227,7 +229,8 @@ class WizLightsScreenState extends State<WizLightsScreen> {
 
   Map<String, dynamic> _map(dynamic value) =>
       value is Map ? Map<String, dynamic>.from(value) : <String, dynamic>{};
-  int get _now => DateTime.now().millisecondsSinceEpoch + (_timeReady ? _serverOffset : 0);
+  int get _now =>
+      DateTime.now().millisecondsSinceEpoch + (_timeReady ? _serverOffset : 0);
   bool _fresh(dynamic stamp, int limitMs) {
     if (stamp is! num) return false;
     final age = _now - stamp.toInt();
@@ -248,7 +251,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
     final uid = _owner;
     if (home == null || uid == null || _sending.contains(id)) return;
     if (FirebaseAuth.instance.currentUser?.uid != uid) return;
-    if (!_connected) {
+    if (!_connected || !_timeReady) {
       _message('Firebase bağlantısı hazır değil.');
       return;
     }
@@ -268,6 +271,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
           ip: ip,
         );
       }
+      // These are absolute, idempotent values, never toggle commands.
       await ref.set({
         'id': commandId,
         'issuedAt': ServerValue.timestamp,
@@ -275,6 +279,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
         'ttlMs': 60000,
         'params': params,
       });
+      // The inline state gives immediate feedback; no queued success snackbar.
     } catch (_) {
       if (mounted && generation == _binding) _autoRetries.remove(id);
       if (mounted && generation == _binding)
@@ -304,7 +309,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
     String? error;
     Map<String, String>? result;
     try {
-      result = await showDialog>(
+      result = await showDialog<Map<String, String>>(
         context: context,
         builder: (context) => StatefulBuilder(
           builder: (context, update) => AlertDialog(
@@ -368,6 +373,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
         ),
       );
     } finally {
+      // Let the dialog route finish its dismissal animation before disposal.
       Future<void>.delayed(const Duration(milliseconds: 400), () {
         name.dispose();
         ip.dispose();
@@ -421,6 +427,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
     }
   }
 
+  /// The shared main header calls this; no setup clutter stays on the room.
   void openRooms() {
     showModalBottomSheet<void>(
       context: context,
@@ -742,6 +749,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
         now: _now,
         reportIsCurrent: current,
       )) continue;
+      // Spend the budget BEFORE asynchronous work, including failures/aborts.
       attempt.consumed = true;
       _refresh(() {
         _sending.add(id);
@@ -854,6 +862,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
         !_fresh(_map(status['bridge'])['lastSeen'], 90000) ||
         !feedback.retryable ||
         _sending.contains(id)) return;
+    // Repeat the same absolute values. NEVER invert an unconfirmed old state.
     _send(id, feedback.params);
   }
 
@@ -893,6 +902,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
   }
 
   void _togglePlanFixture(String fixture) {
+    // Re-read the current report/time at tap, not a possibly stale paint frame.
     final lights = _map(_map(_homeData['config'])['lights']);
     final status = _map(_homeData['status']);
     final bridge =
@@ -1030,6 +1040,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
           ),
         ],
         const SizedBox(height: 14),
+        // Boş izometrik ? kutusunun yerini alan 3B Yatak Odası Kartı
         Bedroom3DCard(
           height: 340,
           isHeating: isHeating,
@@ -1103,3 +1114,382 @@ class WizLightsScreenState extends State<WizLightsScreen> {
     Map<String, dynamic> lights,
     Map<String, dynamic> reported,
     Map<String, dynamic> commands,
+    bool bridgeOnline,
+  ) {
+    final roomId = _selectedRoom;
+    final reduced = MediaQuery.of(context).disableAnimations;
+    final states = {
+      for (final f in HomePlan.fixtures)
+        f.id: _fixtureState(f.id, lights, reported, commands, bridgeOnline),
+    };
+    final thermostat = context.watch<ThermostatProvider>();
+    Widget child;
+    if (roomId == null) {
+      child = HomeFloorPlan(
+        key: const ValueKey('home-floor-plan'),
+        states: states,
+        onRoom: _enterRoom,
+        onLampTap: _togglePlanFixture,
+        onLampControls: _controlsForFixture,
+        onSetup: openSettings,
+      );
+    } else {
+      final room = HomePlan.room(roomId),
+          fixtures = HomePlan.fixturesFor(roomId)
+              .where(
+                (f) =>
+                    HomePlanPreferences.resolve(f.id, _bindings, lights) !=
+                    null,
+              )
+              .toList();
+      final fixture = fixtures.any((f) => f.id == _selectedFixture)
+          ? _selectedFixture
+          : fixtures.firstOrNull?.id;
+      final selected = fixtures.where((f) => f.id == fixture).firstOrNull;
+      final id = fixture == null
+          ? null
+          : HomePlanPreferences.resolve(fixture, _bindings, lights);
+      final state = states[fixture] ?? const FixtureState();
+      final enabled = id != null &&
+          state.controllable &&
+          _connected &&
+          bridgeOnline &&
+          !state.pending;
+      final sensor = thermostat.thermostat;
+      final hasReading = room.sensor &&
+          sensor != null &&
+          !thermostat.isLoading &&
+          thermostat.error == null;
+      final isBedroom = _isBedroomRoom(room.id, room.name);
+      final isHeating = thermostat.heatingFeedback.relay == RelayState.on;
+
+      child = Column(
+        key: ValueKey('detail-$roomId'),
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 4, 16, 0),
+            child: Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 12,
+              children: [
+                TextButton.icon(
+                  key: const ValueKey('back-home-plan'),
+                  onPressed: _leaveRoom,
+                  icon: const Icon(Icons.arrow_back),
+                  label: const Text('Ev planı'),
+                ),
+                Text(room.name, style: Theme.of(context).textTheme.titleLarge),
+              ],
+            ),
+          ),
+          if (fixtures.length > 1)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                children: [
+                  for (final f in fixtures)
+                    ChoiceChip(
+                      key: ValueKey('fixture-${f.id}'),
+                      avatar: f.floor
+                          ? const FloorLampIcon(size: 18)
+                          : const Icon(Icons.lightbulb_outline, size: 18),
+                      label: Text(f.type),
+                      selected: fixture == f.id,
+                      onSelected: (_) =>
+                          _refresh(() => _selectedFixture = f.id),
+                    ),
+                ],
+              ),
+            ),
+          Expanded(
+            child: isBedroom
+                ? _buildBedroom3DOverview(
+                    roomName: room.name,
+                    dimensions: room.dimensions,
+                    area: room.area,
+                    hasSensor: room.sensor,
+                    selectedType: selected?.type,
+                    fixture: fixture,
+                    id: id,
+                    state: state,
+                    enabled: enabled,
+                    lights: lights,
+                    hasReading: hasReading,
+                    temperature:
+                        hasReading && sensor.currentTemperature.isFinite
+                            ? sensor.currentTemperature
+                            : null,
+                    humidity: hasReading && sensor.humidity.isFinite
+                        ? sensor.humidity
+                        : null,
+                    isHeating: isHeating,
+                  )
+                : RoomOverview(
+                    roomName: room.name,
+                    dimensions: room.dimensions,
+                    area: room.area,
+                    roomWidth: room.width,
+                    roomDepth: room.depth,
+                    showSensor: room.sensor,
+                    showLamp: id != null,
+                    planAspect: room.width == null || room.depth == null
+                        ? room.bounds.width / room.bounds.height
+                        : null,
+                    floorLamp: selected?.floor ?? false,
+                    isLightOn: state.on,
+                    ambientOn: fixtures.any((f) => states[f.id]?.on == true)
+                        ? true
+                        : state.on,
+                    pending: state.pending,
+                    commandFeedback: state.feedback,
+                    retryCommand: state.retryable,
+                    lightName: id == null
+                        ? null
+                        : '${_map(lights[id])['name'] ?? 'Ampul'} · ${selected?.type ?? ''}',
+                    onToggle:
+                        enabled ? () => _togglePlanFixture(fixture!) : null,
+                    onControls: id == null ? null : () => _openControls(id),
+                    onSetup: openSettings,
+                    temperature:
+                        hasReading && sensor.currentTemperature.isFinite
+                            ? sensor.currentTemperature
+                            : null,
+                    humidity: hasReading && sensor.humidity.isFinite
+                        ? sensor.humidity
+                        : null,
+                  ),
+          ),
+        ],
+      );
+    }
+    final active = MainSectionActive.of(context);
+    return PopScope(
+      canPop: roomId == null || !active,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && active && _selectedRoom != null) _leaveRoom();
+      },
+      child: GestureDetector(
+        key: const ValueKey('room-swipe-back'),
+        behavior: HitTestBehavior.translucent,
+        onHorizontalDragStart:
+            roomId != null && ! _selectedRoom.toString().toLowerCase().contains('bed') && ! _selectedRoom.toString().toLowerCase().contains('yatak') && active ? (_) => _roomDrag = 0 : null,
+        onHorizontalDragUpdate:
+            roomId != null && ! _selectedRoom.toString().toLowerCase().contains('bed') && ! _selectedRoom.toString().toLowerCase().contains('yatak') && active ? (d) => _roomDrag += d.delta.dx : null,
+        onHorizontalDragCancel:
+            roomId != null && ! _selectedRoom.toString().toLowerCase().contains('bed') && ! _selectedRoom.toString().toLowerCase().contains('yatak') && active ? () => _roomDrag = 0 : null,
+        onHorizontalDragEnd: roomId != null && ! _selectedRoom.toString().toLowerCase().contains('bed') && ! _selectedRoom.toString().toLowerCase().contains('yatak') && active
+            ? (d) {
+                if (_roomDrag > 48 || (d.primaryVelocity ?? 0) > 250)
+                  _leaveRoom();
+                _roomDrag = 0;
+              }
+            : null,
+        child: AnimatedSwitcher(
+          key: const ValueKey('room-transition'),
+          duration: Duration(milliseconds: reduced ? 0 : 240),
+          reverseDuration: Duration(milliseconds: reduced ? 0 : 160),
+          // Do not keep a second interactive old room alive during the transition.
+          layoutBuilder: (current, previous) => current ?? const SizedBox(),
+          transitionBuilder: (child, animation) => FadeTransition(
+            opacity: animation,
+            child: ScaleTransition(
+              scale: Tween<double>(begin: .97, end: 1).animate(animation),
+              child: child,
+            ),
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+
+  Widget _lightCard(
+    String id,
+    Map<String, dynamic> config,
+    Map<String, dynamic> report,
+    Map<String, dynamic> command,
+    bool bridgeOnline, {
+    bool allowRemove = true,
+  }) {
+    final name = config['name'] as String? ?? 'Ampul';
+    final fresh = bridgeOnline &&
+        report['online'] == true &&
+        report['ip'] == config['ip'] &&
+        _fresh(report['reportedAt'], 90000);
+    final knownState = fresh && report['state'] is bool;
+    final feedback = _commandFeedback(id, command, report, fresh);
+    final pending = feedback.pending;
+    final text = feedback.message ??
+        (!fresh
+            ? 'Güncel ampul yanıtı yok'
+            : knownState
+                ? (report['state'] == true
+                    ? 'Ampul bildirimi: Açık'
+                    : 'Ampul bildirimi: Kapalı')
+                : 'Durum bilinmiyor');
+    final enabled = !_dataError &&
+        _connected &&
+        _timeReady &&
+        bridgeOnline &&
+        !_sending.contains(id) &&
+        !pending;
+    final brightness = report['dimming'] is num
+        ? (report['dimming'] as num).toDouble().clamp(10.0, 100.0).toDouble()
+        : 50.0;
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  knownState && report['state'] == true
+                      ? Icons.lightbulb
+                      : Icons.lightbulb_outline,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    name,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+                if (allowRemove)
+                  IconButton(
+                    onPressed: () => _remove(id, name),
+                    icon: const Icon(Icons.delete_outline),
+                    tooltip: 'Ampulü kaldır',
+                  ),
+              ],
+            ),
+            Text(text),
+            if (feedback.retryable && !pending)
+              TextButton.icon(
+                key: ValueKey('retry-command-$id'),
+                onPressed: enabled ? () => _retryCommand(id) : null,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Aynı komutu tekrar dene'),
+              ),
+            Text(
+              config['ip'] as String? ?? '',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            if (report['commandStatus'] == 'rejected')
+              const Text('ESP komutu reddetti; cihaz ayarını kontrol et.'),
+            if (fresh && report['dimming'] is num)
+              Text(
+                'Bildirilen parlaklık: %${(report['dimming'] as num).round()}',
+              ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton(
+                    onPressed:
+                        enabled ? () => _send(id, {'state': true}) : null,
+                    child: const Text('Aç'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed:
+                        enabled ? () => _send(id, {'state': false}) : null,
+                    child: const Text('Kapat'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            _BrightnessControl(
+              key: ValueKey('brightness-$id'),
+              value: brightness,
+              enabled: enabled,
+              onCommit: (v) => _send(id, {'state': true, 'dimming': v.round()}),
+            ),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final preset in <String, Map<String, dynamic>>{
+                  'Sıcak beyaz': {'state': true, 'temp': 2700},
+                  'Soğuk beyaz': {'state': true, 'temp': 6500},
+                  'Kırmızı': {'state': true, 'r': 255, 'g': 0, 'b': 0},
+                  'Yeşil': {'state': true, 'r': 0, 'g': 255, 'b': 0},
+                  'Mavi': {'state': true, 'r': 0, 'g': 0, 'b': 255},
+                }.entries)
+                  OutlinedButton(
+                    onPressed: enabled ? () => _send(id, preset.value) : null,
+                    child: Text(preset.key),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _BrightnessControl extends StatefulWidget {
+  const _BrightnessControl({
+    super.key,
+    required this.value,
+    required this.enabled,
+    required this.onCommit,
+  });
+  final double value;
+  final bool enabled;
+  final ValueChanged<double> onCommit;
+  @override
+  State<_BrightnessControl> createState() => _BrightnessControlState();
+}
+
+class _BrightnessControlState extends State<_BrightnessControl> {
+  late double _value;
+  bool _dragging = false;
+  @override
+  void initState() {
+    super.initState();
+    _value = widget.value;
+  }
+
+  @override
+  void didUpdateWidget(covariant _BrightnessControl oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!_dragging && oldWidget.value != widget.value) _value = widget.value;
+    if (!widget.enabled) _dragging = false;
+  }
+
+  @override
+  Widget build(BuildContext context) => Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Parlaklık: %${_value.round()}'),
+          Slider(
+            value: _value,
+            min: 10,
+            max: 100,
+            divisions: 90,
+            onChanged: widget.enabled
+                ? (v) => setState(() {
+                      _dragging = true;
+                      _value = v;
+                    })
+                : null,
+            onChangeEnd: widget.enabled
+                ? (v) {
+                    _dragging = false;
+                    widget.onCommit(v);
+                  }
+                : null,
+          ),
+        ],
+      );
+}

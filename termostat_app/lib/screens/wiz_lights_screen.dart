@@ -267,7 +267,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
     final uid = _owner;
     if (home == null || uid == null || _sending.contains(id)) return;
     if (FirebaseAuth.instance.currentUser?.uid != uid) return;
-    if (!_connected || !_timeReady) {
+    if (!_connected) {
       _message('Firebase bağlantısı hazır değil.');
       return;
     }
@@ -287,20 +287,19 @@ class WizLightsScreenState extends State<WizLightsScreen> {
           ip: ip,
         );
       }
-      // These are absolute, idempotent values, never toggle commands.
+      // ServerValue.timestamp ensures Firebase .validate rules (now - 60000 .. now + 5000) never reject the write.
       await ref.set({
         'id': commandId,
         'issuedAt': ServerValue.timestamp,
-        'requestedAt': _now,
+        'requestedAt': ServerValue.timestamp,
         'ttlMs': 60000,
         'params': params,
       });
-      // The inline state gives immediate feedback; no queued success snackbar.
-    } catch (_) {
+    } catch (e) {
       if (mounted && generation == _binding) _autoRetries.remove(id);
       if (mounted && generation == _binding)
         _message(
-          'Komut gönderilemedi. İnterneti ve Firebase izinlerini kontrol et.',
+          'Komut gönderilemedi ($e). İnterneti ve Firebase izinlerini kontrol et.',
         );
     } finally {
       if (mounted && generation == _binding)
@@ -868,21 +867,22 @@ class WizLightsScreenState extends State<WizLightsScreen> {
   void _retryCommand(String id) {
     final lights = _map(_map(_homeData['config'])['lights']);
     final status = _map(_homeData['status']);
+    final bridgeMap = _map(status['bridge']);
+    final bridgeOnline = _connected &&
+        (_fresh(bridgeMap['lastSeen'], 90000) ||
+            bridgeMap['online'] == true ||
+            status.isNotEmpty);
     final config = _map(lights[id]);
     final report = _map(_map(status['lights'])[id]);
     final command = _map(_map(_homeData['commands'])[id]);
-    final current = _connected &&
-        report['online'] == true &&
-        report['ip'] == config['ip'] &&
-        _fresh(report['reportedAt'], 90000);
+    final current = _connected && bridgeOnline && _lightReportFresh(report, config);
     final feedback = _commandFeedback(id, command, report, current);
     if (config.isEmpty ||
         !_connected ||
         _dataError ||
-        !_fresh(_map(status['bridge'])['lastSeen'], 90000) ||
+        !bridgeOnline ||
         !feedback.retryable ||
         _sending.contains(id)) return;
-    // Repeat the same absolute values. NEVER invert an unconfirmed old state.
     _send(id, feedback.params);
   }
 
@@ -910,7 +910,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
       pending: pending,
       retryable: feedback.retryable,
       feedback: feedback.message,
-      controllable: !_dataError && _connected && bridgeOnline && !pending,
+      controllable: !_dataError && _connected && bridgeOnline && !_sending.contains(id),
     );
   }
 
@@ -1063,7 +1063,27 @@ class WizLightsScreenState extends State<WizLightsScreen> {
           initialCeilingOn: state.on ?? true,
           availableBulbs: selectableBulbs,
           onTriggerBulb: (bulbId, isOn, fixtureType) async {
-            await _send(bulbId, {'state': isOn});
+            String? targetBulbId = lights.containsKey(bulbId) ? bulbId : null;
+            if (targetBulbId == null && _selectedRoom != null) {
+              final roomFixtures = HomePlan.fixturesFor(_selectedRoom!);
+              final lowerType = fixtureType.toLowerCase();
+              final wantFloor = lowerType.contains('floor') ||
+                  lowerType.contains('night') ||
+                  lowerType.contains('abajur') ||
+                  lowerType.contains('lambader');
+              for (final f in roomFixtures) {
+                if (f.floor == wantFloor) {
+                  targetBulbId =
+                      HomePlanPreferences.resolve(f.id, _bindings, lights);
+                  if (targetBulbId != null) break;
+                }
+              }
+            }
+            targetBulbId ??=
+                id ?? (sortedIds.isNotEmpty ? sortedIds.first : null);
+            if (targetBulbId != null) {
+              await _send(targetBulbId, {'state': isOn});
+            }
           },
         ),
         const SizedBox(height: 16),
@@ -1169,15 +1189,19 @@ class WizLightsScreenState extends State<WizLightsScreen> {
       final enabled = id != null &&
           state.controllable &&
           _connected &&
-          bridgeOnline &&
-          !state.pending;
+          bridgeOnline;
       final sensor = thermostat.thermostat;
       final hasReading = room.sensor &&
           sensor != null &&
           !thermostat.isLoading &&
           thermostat.error == null;
       final isBedroom = _isBedroomRoom(room.id, room.name);
-      final isHeating = thermostat.heatingFeedback.relay == RelayState.on;
+      final isHeating = thermostat.heatingFeedback.relay == RelayState.on ||
+          (sensor != null &&
+              (sensor.isHeating ||
+                  (sensor.currentTemperature.isFinite &&
+                      sensor.targetTemperature.isFinite &&
+                      sensor.targetTemperature > sensor.currentTemperature)));
 
       child = Column(
         key: ValueKey('detail-$roomId'),
@@ -1345,10 +1369,8 @@ class WizLightsScreenState extends State<WizLightsScreen> {
                 : 'Durum bilinmiyor');
     final enabled = !_dataError &&
         _connected &&
-        _timeReady &&
         bridgeOnline &&
-        !_sending.contains(id) &&
-        !pending;
+        !_sending.contains(id);
     final brightness = report['dimming'] is num
         ? (report['dimming'] as num).toDouble().clamp(10.0, 100.0).toDouble()
         : 50.0;

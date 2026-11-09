@@ -1,12 +1,9 @@
+import 'dart:async';
 import 'dart:convert';
-import 'package:flutter/foundation.dart';
-import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
-/// Yatak odasındaki seçilebilir ampul modeli.
-/// Kendi WiZ ampul listeni buraya aktarabilir veya varsayılan listeyi düzenleyebilirsin.
 class SelectableBedroomBulb {
   final String id;
   final String name;
@@ -19,73 +16,100 @@ class SelectableBedroomBulb {
   });
 }
 
-/// Haritadaki "Yatak odası" ekranında yer alan boş izometrik kutunun yerine
-/// doğrudan koyabileceğin 3B Etkileşimli Yatak Odası Kartı.
 class Bedroom3DCard extends StatefulWidget {
+  final double height;
+  final bool isHeating;
+  final bool initialCeilingOn;
+  final List<SelectableBedroomBulb> availableBulbs;
+  final Future<void> Function(
+    String bulbId,
+    bool isOn,
+    String fixtureType,
+  )? onTriggerBulb;
+
   const Bedroom3DCard({
     super.key,
-    this.availableBulbs = const [
-      SelectableBedroomBulb(id: 'yatak_tavan', name: 'Yatak Odası · Tavan Lambası'),
-      SelectableBedroomBulb(id: 'yatak_abajur', name: 'Yatak Odası · Abajur / Lambader'),
-      SelectableBedroomBulb(id: 'yatak_tumu', name: 'Yatak Odası · Tüm Ampuller'),
-    ],
-    this.onTriggerBulb,
+    this.height = 340,
     this.isHeating = false,
-    this.initialCeilingOn = false,
-    this.initialFloorLampOn = false,
-    this.height = 330,
+    this.initialCeilingOn = true,
+    this.availableBulbs = const [],
+    this.onTriggerBulb,
   });
-
-  /// Seçim penceresinde listelenecek yatak odası ampulleri
-  final List<SelectableBedroomBulb> availableBulbs;
-
-  /// 3B odada Tavan Lambası veya Abajur tıklandığında tetiklenen geri çağırım:
-  /// (bulbId, isOn, fixtureType) -> Kendi WiZ ampul aç/kapat fonksiyonunu buraya bağlayabilirsin.
-  final Future<void> Function(String bulbId, bool isOn, String fixtureType)? onTriggerBulb;
-
-  /// Kombi çalışıyorsa 3B odadaki petek hafif sıcak parlar
-  final bool isHeating;
-
-  final bool initialCeilingOn;
-  final bool initialFloorLampOn;
-  final double height;
 
   @override
   State<Bedroom3DCard> createState() => _Bedroom3DCardState();
 }
 
 class _Bedroom3DCardState extends State<Bedroom3DCard> {
-  static const String _prefLayoutKey = 'bedroom_3d_saved_layout_v4';
-  static const String _prefCeilingBulbKey = 'bedroom_3d_ceiling_bulb_id';
-  static const String _prefFloorLampBulbKey = 'bedroom_3d_floor_lamp_bulb_id';
+  static const String _prefCeilingBulbKey = 'bedroom_3d_ceiling_bulb_id_v2';
+  static const String _prefNightstandBulbKey =
+      'bedroom_3d_nightstand_bulb_id_v2';
+  static const String _prefLayoutLockKey = 'bedroom_3d_layout_locked_v2';
 
   late final WebViewController _controller;
-  bool _isLoaded = false;
-
-  String? _selectedCeilingBulbId;
-  String? _selectedFloorLampBulbId;
-  Map<String, dynamic>? _savedLayoutJson;
+  bool _pageLoaded = false;
+  bool _layoutLocked = true;
+  bool _ceilingOn = true;
+  bool _nightstandOn = false;
+  String? _ceilingBulbId;
+  String? _nightstandBulbId;
 
   @override
   void initState() {
     super.initState();
-    _loadPreferences();
+    _ceilingOn = widget.initialCeilingOn;
+    _initController();
+    _loadSavedBindings();
+  }
 
+  Future<void> _loadSavedBindings() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedCeiling = prefs.getString(_prefCeilingBulbKey);
+      final savedNight = prefs.getString(_prefNightstandBulbKey);
+      final savedLock = prefs.getBool(_prefLayoutLockKey) ?? true;
+      if (!mounted) return;
+      setState(() {
+        _ceilingBulbId = savedCeiling;
+        _nightstandBulbId = savedNight;
+        _layoutLocked = savedLock;
+      });
+      _resolveDefaultBulbsIfNeeded();
+      await _syncSceneState();
+    } catch (_) {
+      _resolveDefaultBulbsIfNeeded();
+    }
+  }
+
+  void _resolveDefaultBulbsIfNeeded() {
+    if (widget.availableBulbs.isEmpty) return;
+    final validIds = widget.availableBulbs.map((b) => b.id).toSet();
+    if (_ceilingBulbId == null || !validIds.contains(_ceilingBulbId)) {
+      _ceilingBulbId = widget.availableBulbs.first.id;
+    }
+    if (_nightstandBulbId == null || !validIds.contains(_nightstandBulbId)) {
+      _nightstandBulbId = widget.availableBulbs.length > 1
+          ? widget.availableBulbs[1].id
+          : widget.availableBulbs.first.id;
+    }
+  }
+
+  void _initController() {
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(const Color(0xFF18191D))
+      ..setBackgroundColor(const Color(0xFF0F1319))
       ..addJavaScriptChannel(
-        'FlutterRoomChannel',
-        onMessageReceived: (JavaScriptMessage msg) {
-          _onMessageFrom3D(msg.message);
+        'FlutterRoomBridge',
+        onMessageReceived: (JavaScriptMessage message) {
+          _handleJsMessage(message.message);
         },
       )
       ..setNavigationDelegate(
         NavigationDelegate(
-          onPageFinished: (_) {
+          onPageFinished: (_) async {
             if (!mounted) return;
-            setState(() => _isLoaded = true);
-            _syncStateTo3D();
+            setState(() => _pageLoaded = true);
+            await _syncSceneState();
           },
         ),
       )
@@ -95,237 +119,177 @@ class _Bedroom3DCardState extends State<Bedroom3DCard> {
   @override
   void didUpdateWidget(covariant Bedroom3DCard oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.isHeating != widget.isHeating && _isLoaded) {
-      _syncStateTo3D();
+    _resolveDefaultBulbsIfNeeded();
+    bool needsSync = false;
+    if (oldWidget.isHeating != widget.isHeating) {
+      needsSync = true;
+    }
+    if (oldWidget.initialCeilingOn != widget.initialCeilingOn &&
+        widget.initialCeilingOn != _ceilingOn) {
+      _ceilingOn = widget.initialCeilingOn;
+      needsSync = true;
+    }
+    if (needsSync) {
+      unawaited(_syncSceneState());
     }
   }
 
-  Future<void> _loadPreferences() async {
-    final prefs = await SharedPreferences.getInstance();
-    final defaultFirst =
-        widget.availableBulbs.isNotEmpty ? widget.availableBulbs.first.id : null;
-    final defaultSecond = widget.availableBulbs.length > 1
-        ? widget.availableBulbs[1].id
-        : defaultFirst;
-
-    final savedLayoutStr = prefs.getString(_prefLayoutKey);
-    Map<String, dynamic>? parsedLayout;
-    if (savedLayoutStr != null && savedLayoutStr.isNotEmpty) {
+  Future<void> _syncSceneState() async {
+    if (!_pageLoaded) return;
+    final heatingBool = widget.isHeating ? 'true' : 'false';
+    final ceilingBool = _ceilingOn ? 'true' : 'false';
+    final nightBool = _nightstandOn ? 'true' : 'false';
+    final lockBool = _layoutLocked ? 'true' : 'false';
+    final js = '''
       try {
-        parsedLayout = jsonDecode(savedLayoutStr) as Map<String, dynamic>;
-      } catch (_) {}
-    }
-
-    if (!mounted) return;
-    setState(() {
-      _selectedCeilingBulbId =
-          prefs.getString(_prefCeilingBulbKey) ?? defaultFirst;
-      _selectedFloorLampBulbId =
-          prefs.getString(_prefFloorLampBulbKey) ?? defaultSecond;
-      _savedLayoutJson = parsedLayout;
-    });
-
-    if (_isLoaded) {
-      _syncStateTo3D();
-    }
-  }
-
-  void _syncStateTo3D() {
-    if (!_isLoaded) return;
-    final payload = <String, dynamic>{
-      'isHeating': widget.isHeating,
-      if (_savedLayoutJson != null) 'savedLayout': _savedLayoutJson,
-    };
-    _controller.runJavaScript(
-      'if (window.syncFromFlutter) { window.syncFromFlutter(${jsonEncode(payload)}); }',
-    );
-  }
-
-  Future<void> _onMessageFrom3D(String rawJson) async {
-    try {
-      final map = jsonDecode(rawJson) as Map<String, dynamic>;
-      final type = map['type']?.toString();
-
-      // 1. Eşya yeri veya kilidi değiştiğinde kalıcı olarak kaydet
-      if (type == 'layout_saved') {
-        final layoutData = map['data'];
-        if (layoutData is Map<String, dynamic>) {
-          _savedLayoutJson = layoutData;
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setString(_prefLayoutKey, jsonEncode(layoutData));
+        if (typeof window.setHeatingGlow === 'function') {
+          window.setHeatingGlow($heatingBool);
         }
+        if (typeof window.setRoomLightState === 'function') {
+          window.setRoomLightState('ceiling', $ceilingBool);
+          window.setRoomLightState('nightstand', $nightBool);
+        }
+        if (typeof window.setLayoutLocked === 'function') {
+          window.setLayoutLocked($lockBool);
+        }
+      } catch (e) {}
+    ''';
+    try {
+      await _controller.runJavaScript(js);
+    } catch (_) {}
+  }
+
+  void _handleJsMessage(String raw) {
+    try {
+      final data = jsonDecode(raw);
+      if (data is! Map) return;
+      final type = data['type']?.toString() ?? '';
+      if (type == 'sceneReady') {
+        unawaited(_syncSceneState());
         return;
       }
-
-      // 2. 3B odada Tavan Lambası veya Abajura tıklandığında seçili yatak odası ampulünü tetikle
-      if (type == 'light_toggle') {
-        final fixture = map['fixture']?.toString() ?? 'ceiling_light';
-        final isOn = map['isOn'] as bool? ?? false;
-
-        final targetBulbId = fixture == 'ceiling_light'
-            ? _selectedCeilingBulbId
-            : _selectedFloorLampBulbId;
-
-        if (targetBulbId == null || targetBulbId == 'none') {
-          if (mounted) {
-            ScaffoldMessenger.of(context).clearSnackBars();
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  '${fixture == 'ceiling_light' ? 'Tavan lambası' : 'Abajur'} için henüz ampul seçilmedi.',
-                ),
-                action: SnackBarAction(
-                  label: 'Seç',
-                  onPressed: _showBulbMappingSheet,
-                ),
-                duration: const Duration(seconds: 2),
-              ),
-            );
-          }
-          return;
+      if (type == 'lightToggled' || type == 'toggleLight') {
+        final fixture = (data['fixture'] ?? data['target'] ?? 'ceiling')
+            .toString()
+            .toLowerCase();
+        final isOn = data['state'] == true || data['isOn'] == true;
+        _resolveDefaultBulbsIfNeeded();
+        String? targetBulbId;
+        if (fixture.contains('night') ||
+            fixture.contains('floor') ||
+            fixture.contains('abajur') ||
+            fixture.contains('desk')) {
+          _nightstandOn = isOn;
+          targetBulbId = _nightstandBulbId ?? _ceilingBulbId;
+        } else {
+          _ceilingOn = isOn;
+          targetBulbId = _ceilingBulbId ?? _nightstandBulbId;
         }
-
-        await _triggerSelectedBedroomBulb(
-          bulbId: targetBulbId,
-          isOn: isOn,
-          fixtureType: fixture,
-        );
+        if (targetBulbId == null && widget.availableBulbs.isNotEmpty) {
+          targetBulbId = widget.availableBulbs.first.id;
+        }
+        if (widget.onTriggerBulb != null) {
+          unawaited(
+            widget.onTriggerBulb!(targetBulbId ?? '', isOn, fixture),
+          );
+        }
       }
     } catch (_) {}
   }
 
-  /// =========================================================================
-  /// YATAK ODASI AMPUL TETİKLEME NOKTASI
-  /// İstersen widget'a `onTriggerBulb` parametresi geçebilir, istersen
-  /// doğrudan aşağıdaki TODO kısmına kendi WiZ ampul kodunu yazabilirsin.
-  /// =========================================================================
-  Future<void> _triggerSelectedBedroomBulb({
-    required String bulbId,
-    required bool isOn,
-    required String fixtureType,
-  }) async {
-    if (widget.onTriggerBulb != null) {
-      await widget.onTriggerBulb!(bulbId, isOn, fixtureType);
-    } else {
-      // TODO: Kendi yatak odası WiZ ampul kontrol kodunu buraya ekleyebilirsin.
-      // Örnek:
-      // await context.read<WizProvider>().setBulbState(bulbId, isOn);
-      debugPrint('3B Oda Işık Tetiklendi -> Ampul: $bulbId | Durum: ${isOn ? "AÇIK" : "KAPALI"} ($fixtureType)');
-    }
-
-    if (!mounted) return;
-    final bulbName = widget.availableBulbs
-        .where((b) => b.id == bulbId)
-        .map((b) => b.name)
-        .firstOrNull ?? bulbId;
-
-    ScaffoldMessenger.of(context).clearSnackBars();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('$bulbName: ${isOn ? "Açıldı" : "Kapatıldı"}'),
-        duration: const Duration(milliseconds: 1300),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
+  Future<void> _toggleLock() async {
+    final next = !_layoutLocked;
+    setState(() => _layoutLocked = next);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_prefLayoutLockKey, next);
+    } catch (_) {}
+    await _syncSceneState();
   }
 
-  /// Kullanıcının 3B odadaki Tavan Lambası ve Abajur için hangi yatak odası
-  /// ampulünün tetikleneceğini seçtiği alt pencere (Bottom Sheet).
-  Future<void> _showBulbMappingSheet() async {
-    final prefs = await SharedPreferences.getInstance();
-    if (!mounted) return;
-
+  Future<void> _openBulbPickerSheet() async {
+    _resolveDefaultBulbsIfNeeded();
     await showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
-      useSafeArea: true,
       builder: (ctx) {
         return StatefulBuilder(
-          builder: (context, setModalState) {
-            final options = [
-              const DropdownMenuItem<String>(
-                value: 'none',
-                child: Text('Tetikleme Yok (Sadece 3B Işık)'),
-              ),
-              ...widget.availableBulbs.map(
-                (b) => DropdownMenuItem<String>(
-                  value: b.id,
-                  child: Text(b.name, overflow: TextOverflow.ellipsis),
-                ),
-              ),
-            ];
-
-            return Padding(
-              padding: const EdgeInsets.fromLTRB(20, 4, 20, 28),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '3B Oda · Yatak Odası Ampul Eşleştirme',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.bold,
+          builder: (ctx, setSheetState) {
+            final bulbs = widget.availableBulbs;
+            return SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      '3B Yatak Odası Ampul Eşleştirmesi',
+                      style: Theme.of(ctx).textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                    ),
+                    const SizedBox(height: 8),
+                    if (bulbs.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 12),
+                        child: Text(
+                          'Henüz kayıtlı WiZ ampul yok. Sağ üstteki Ev ve ampul ayarlarından ampul ekleyebilirsin.',
                         ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    '3B odadaki lambalara dokunduğunda hangi yatak odası ampulünün açılıp kapanacağını seçin:',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                  const SizedBox(height: 18),
-                  DropdownButtonFormField<String>(
-                    value: options.any((o) => o.value == _selectedCeilingBulbId)
-                        ? _selectedCeilingBulbId
-                        : 'none',
-                    isExpanded: true,
-                    decoration: InputDecoration(
-                      labelText: '💡 3B Tavan Lambası Tıklandığında',
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
+                      )
+                    else ...[
+                      DropdownButtonFormField<String>(
+                        value: bulbs.any((b) => b.id == _ceilingBulbId)
+                            ? _ceilingBulbId
+                            : bulbs.first.id,
+                        decoration: const InputDecoration(
+                          labelText: 'Tavan Lambası (3B Sahne)',
+                          prefixIcon: Icon(Icons.light),
+                        ),
+                        items: [
+                          for (final b in bulbs)
+                            DropdownMenuItem(
+                              value: b.id,
+                              child: Text(b.name),
+                            ),
+                        ],
+                        onChanged: (val) async {
+                          setSheetState(() => _ceilingBulbId = val);
+                          setState(() => _ceilingBulbId = val);
+                          final prefs = await SharedPreferences.getInstance();
+                          if (val != null) {
+                            await prefs.setString(_prefCeilingBulbKey, val);
+                          }
+                        },
                       ),
-                      contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 14, vertical: 12),
-                    ),
-                    items: options,
-                    onChanged: (val) async {
-                      if (val == null) return;
-                      setModalState(() => _selectedCeilingBulbId = val);
-                      setState(() => _selectedCeilingBulbId = val);
-                      await prefs.setString(_prefCeilingBulbKey, val);
-                    },
-                  ),
-                  const SizedBox(height: 14),
-                  DropdownButtonFormField<String>(
-                    value: options.any((o) => o.value == _selectedFloorLampBulbId)
-                        ? _selectedFloorLampBulbId
-                        : 'none',
-                    isExpanded: true,
-                    decoration: InputDecoration(
-                      labelText: '🛋️ 3B Üç Ayaklı Abajur Tıklandığında',
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
+                      const SizedBox(height: 14),
+                      DropdownButtonFormField<String>(
+                        value: bulbs.any((b) => b.id == _nightstandBulbId)
+                            ? _nightstandBulbId
+                            : bulbs.first.id,
+                        decoration: const InputDecoration(
+                          labelText: 'Komodin Abajuru (3B Sahne)',
+                          prefixIcon: Icon(Icons.wb_incandescent_outlined),
+                        ),
+                        items: [
+                          for (final b in bulbs)
+                            DropdownMenuItem(
+                              value: b.id,
+                              child: Text(b.name),
+                            ),
+                        ],
+                        onChanged: (val) async {
+                          setSheetState(() => _nightstandBulbId = val);
+                          setState(() => _nightstandBulbId = val);
+                          final prefs = await SharedPreferences.getInstance();
+                          if (val != null) {
+                            await prefs.setString(_prefNightstandBulbKey, val);
+                          }
+                        },
                       ),
-                      contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 14, vertical: 12),
-                    ),
-                    items: options,
-                    onChanged: (val) async {
-                      if (val == null) return;
-                      setModalState(() => _selectedFloorLampBulbId = val);
-                      setState(() => _selectedFloorLampBulbId = val);
-                      await prefs.setString(_prefFloorLampBulbKey, val);
-                    },
-                  ),
-                  const SizedBox(height: 18),
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton.icon(
-                      onPressed: () => Navigator.pop(ctx),
-                      icon: const Icon(Icons.check_rounded, size: 18),
-                      label: const Text('Kaydet ve Kapat'),
-                    ),
-                  ),
-                ],
+                    ],
+                  ],
+                ),
               ),
             );
           },
@@ -336,91 +300,150 @@ class _Bedroom3DCardState extends State<Bedroom3DCard> {
 
   @override
   Widget build(BuildContext context) {
-    final ceilingName = widget.availableBulbs
-            .where((b) => b.id == _selectedCeilingBulbId)
-            .map((b) => b.name)
-            .firstOrNull ??
-        'Ampul seçilmedi';
-    final floorName = widget.availableBulbs
-            .where((b) => b.id == _selectedFloorLampBulbId)
-            .map((b) => b.name)
-            .firstOrNull ??
-        'Ampul seçilmedi';
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // 3B Etkileşimli Oda Kutusu (Boş izometrik kutunun yerini alır)
-        Container(
-          height: widget.height,
-          decoration: BoxDecoration(
-            color: const Color(0xFF18191D),
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(
-              color: Theme.of(context).dividerColor.withOpacity(0.25),
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.08),
-                blurRadius: 12,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          clipBehavior: Clip.antiAlias,
-          child: Stack(
-            children: [
-              WebViewWidget(
-                controller: _controller,
-                // Sayfa kaydırması ile 3B oda döndürmenin çakışmaması için:
-                gestureRecognizers: {
-                  Factory<OneSequenceGestureRecognizer>(
-                    () => EagerGestureRecognizer(),
-                  ),
-                },
-              ),
-              if (!_isLoaded)
-                const Center(
-                  child: CircularProgressIndicator(),
-                ),
-            ],
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        height: widget.height,
+        decoration: BoxDecoration(
+          color: const Color(0xFF0F1319),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: widget.isHeating
+                ? const Color(0xFFFF5722).withValues(alpha: 0.65)
+                : Colors.white12,
+            width: widget.isHeating ? 1.8 : 1.0,
           ),
         ),
-        const SizedBox(height: 8),
-        // Alt Bilgi & Yatak Odası Ampul Eşleştirme Satırı
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        child: Stack(
           children: [
-            Expanded(
-              child: Text(
-                '💡 $ceilingName  ·  🛋️ $floorName',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(context)
-                          .colorScheme
-                          .onSurface
-                          .withOpacity(0.75),
-                    ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
+            Positioned.fill(
+              child: WebViewWidget(controller: _controller),
             ),
-            const SizedBox(width: 8),
-            OutlinedButton.icon(
-              onPressed: _showBulbMappingSheet,
-              style: OutlinedButton.styleFrom(
-                visualDensity: VisualDensity.compact,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            if (!_pageLoaded)
+              const Positioned.fill(
+                child: Center(
+                  child: CircularProgressIndicator(),
+                ),
               ),
-              icon: const Icon(Icons.lightbulb_outline, size: 16),
-              label: const Text(
-                'Ampul Seçimi',
-                style: TextStyle(fontSize: 12),
+            // Sol üst: Kalorifer ısıtma durumu rozeti
+            if (widget.isHeating)
+              Positioned(
+                top: 10,
+                left: 10,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFD84315).withValues(alpha: 0.88),
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Color(0x88FF3D00),
+                        blurRadius: 10,
+                      ),
+                    ],
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.local_fire_department,
+                        color: Colors.white,
+                        size: 15,
+                      ),
+                      SizedBox(width: 4),
+                      Text(
+                        'Kalorifer Isıtıyor',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            // Sağ üst: Kilit ve Ampul Eşleştirme butonları
+            Positioned(
+              top: 10,
+              right: 10,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Material(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(10),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(10),
+                      onTap: _toggleLock,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 9,
+                          vertical: 6,
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              _layoutLocked ? Icons.lock : Icons.lock_open,
+                              color: _layoutLocked
+                                  ? Colors.amberAccent
+                                  : Colors.white70,
+                              size: 15,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              _layoutLocked ? 'Kilitli' : 'Düzenle',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 11.5,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Material(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(10),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(10),
+                      onTap: _openBulbPickerSheet,
+                      child: const Padding(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: 9,
+                          vertical: 6,
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.lightbulb_outline,
+                              color: Colors.amberAccent,
+                              size: 15,
+                            ),
+                            SizedBox(width: 4),
+                            Text(
+                              'Ampuller',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 11.5,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
         ),
-      ],
+      ),
     );
   }
 }

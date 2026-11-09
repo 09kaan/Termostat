@@ -7,18 +7,6 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 
-/// Ankara için 5 günlük / 3 saatlik OpenWeatherMap tahminlerini:
-/// 1) Uygulama her açıldığında ve ön plana (resumed) geldiğinde,
-/// 2) Uygulama açıkken her akşam (18:00 - 23:59 arası) ve 2 saatte bir otomatik olarak çeker.
-/// Her çekişte mevcut 07:00 bildirimlerini en güncel tahminle üzerine yazar (overwrite).
-///
-/// Özellikler:
-/// - Doğrudan günün normal sıcaklığına (temp) bakar (hissedilen veya sabah sıcaklığına değil):
-///   * < 15°C      -> "Hava soğuk, mont giy 🧥"
-///   * 15°C - 17°C -> "Hava serin, mont giyebilirsin 🧥"
-///   * > 17°C      -> "Hava ılıman, mont gerekmez 🤵"
-/// - Hafta içi (Pzt-Cum): Sabah 08:00-09:00 ve akşam 17:00 sonrası yağmura odaklanır.
-/// - Hafta sonu (Cmt-Paz): Saat kısıtlaması olmadan tüm günün genel yağmur oranına bakar.
 class MorningWeatherNotificationService with WidgetsBindingObserver {
   MorningWeatherNotificationService._();
   static final MorningWeatherNotificationService instance =
@@ -34,9 +22,7 @@ class MorningWeatherNotificationService with WidgetsBindingObserver {
       FlutterLocalNotificationsPlugin();
   bool _initialized = false;
   String _apiKey = '';
-  Timer? _periodicRefreshTimer;
 
-  /// Uygulama açılışında (ör. main.dart veya HomeScreen initState içinde) çağırın.
   Future<void> initializeAndSync({required String owmApiKey}) async {
     _apiKey = owmApiKey.trim();
 
@@ -62,20 +48,9 @@ class MorningWeatherNotificationService with WidgetsBindingObserver {
         ),
       );
       _initialized = true;
-
-      _periodicRefreshTimer?.cancel();
-      _periodicRefreshTimer = Timer.periodic(
-        const Duration(hours: 2),
-        (_) {
-          if (_apiKey.isNotEmpty) {
-            refreshForecastAndSchedule(owmApiKey: _apiKey, force: true);
-          }
-        },
-      );
     }
 
     await _scheduleFromCache();
-
     if (_apiKey.isNotEmpty) {
       await refreshForecastAndSchedule(owmApiKey: _apiKey, force: true);
     }
@@ -84,38 +59,7 @@ class MorningWeatherNotificationService with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed && _apiKey.isNotEmpty) {
-      _refreshIfNeededOnResume();
-    }
-  }
-
-  Future<void> _refreshIfNeededOnResume() async {
-    final prefs = await SharedPreferences.getInstance();
-    final lastMs = prefs.getInt(_prefLastFetchMsKey) ?? 0;
-    final now = DateTime.now();
-    final elapsedMin = (now.millisecondsSinceEpoch - lastMs) / 60000.0;
-
-    // Akşam 18:00 - 23:59 arasındaysa 15 dakikada bir, gündüz ise 45 dakikada bir en yeniyi çeker
-    final isEvening = now.hour >= 18;
-    if (elapsedMin >= (isEvening ? 15 : 45)) {
-      await refreshForecastAndSchedule(owmApiKey: _apiKey, force: true);
-    }
-  }
-
-  Future<bool> isEnabled() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_prefEnabledKey) ?? true;
-  }
-
-  Future<void> setEnabled(bool enabled, {required String owmApiKey}) async {
-    _apiKey = owmApiKey.trim();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_prefEnabledKey, enabled);
-    if (!enabled) {
-      for (int i = 0; i < 5; i++) {
-        await _notifications.cancel(_baseNotificationId + i);
-      }
-    } else {
-      await refreshForecastAndSchedule(owmApiKey: _apiKey, force: true);
+      refreshForecastAndSchedule(owmApiKey: _apiKey, force: true);
     }
   }
 
@@ -124,9 +68,6 @@ class MorningWeatherNotificationService with WidgetsBindingObserver {
     bool force = false,
   }) async {
     try {
-      final enabled = await isEnabled();
-      if (!enabled) return;
-
       final uri = Uri.parse(
         'https://api.openweathermap.org/data/2.5/forecast?q=$_city&appid=$owmApiKey&units=metric&lang=tr',
       );
@@ -135,20 +76,15 @@ class MorningWeatherNotificationService with WidgetsBindingObserver {
 
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_prefForecastCacheKey, response.body);
-      await prefs.setInt(
-        _prefLastFetchMsKey,
-        DateTime.now().millisecondsSinceEpoch,
-      );
+      await prefs.setInt(_prefLastFetchMsKey, DateTime.now().millisecondsSinceEpoch);
 
       await _scheduleFromRawJson(response.body);
     } catch (e) {
-      debugPrint('[WeatherBriefing] Forecast fetch skipped/offline: $e');
+      debugPrint('[WeatherBriefing] Fetch error: $e');
     }
   }
 
   Future<void> _scheduleFromCache() async {
-    final enabled = await isEnabled();
-    if (!enabled) return;
     final prefs = await SharedPreferences.getInstance();
     final cached = prefs.getString(_prefForecastCacheKey);
     if (cached != null && cached.isNotEmpty) {
@@ -196,8 +132,6 @@ class MorningWeatherNotificationService with WidgetsBindingObserver {
             android: AndroidNotificationDetails(
               'ankara_morning_weather_channel',
               'Sabah Hava Durumu Asistanı',
-              channelDescription:
-                  'Her sabah 07:00 Ankara gün sıcaklığı, yağmur ve mont önerisi',
               importance: Importance.max,
               priority: Priority.high,
             ),
@@ -256,16 +190,12 @@ class MorningWeatherNotificationService with WidgetsBindingObserver {
     final isWeekend = targetDate.weekday == DateTime.saturday ||
         targetDate.weekday == DateTime.sunday;
 
-    // Gündüz (09:00 - 18:00) normal gün sıcaklığı (hissedilen veya sabah ayazı değil)
     final daytimeSlots =
         daySlots.where((s) => s.hour >= 9 && s.hour <= 18).toList();
     final refSlots = daytimeSlots.isNotEmpty ? daytimeSlots : daySlots;
-
-    // Günün tepe (maksimum) normal sıcaklığı (hava durumu raporlarındaki "Bugün X derece" değeri)
     final dayMaxTemp =
         refSlots.map((s) => s.temp).reduce((a, b) => a > b ? a : b).round();
 
-    // 1. DOĞRUDAN GÜNÜN NORMAL SICAKLIĞINA GÖRE MONT KURALI (<15, 15-17, >17)
     String coatAdvice;
     if (dayMaxTemp < 15) {
       coatAdvice = 'Hava soğuk ($dayMaxTemp°C), mont giy 🧥';
@@ -275,7 +205,6 @@ class MorningWeatherNotificationService with WidgetsBindingObserver {
       coatAdvice = 'Hava iyi ($dayMaxTemp°C), mont gerekmez 🤵';
     }
 
-    // 2. YAĞMUR KURALI (Hafta sonu genel, Hafta içi 08-09 ve 17+ odaklı)
     int morningRainProb = 0;
     for (final s in daySlots) {
       if (s.hour >= 6 && s.hour <= 10 && s.rainProb > morningRainProb) {
@@ -299,19 +228,13 @@ class MorningWeatherNotificationService with WidgetsBindingObserver {
     int headlineRainProb;
 
     if (isWeekend) {
-      // HAFTA SONU: Doğrudan günün genel yağmur oranına bakar
       headlineRainProb = overallRainProb;
       if (overallRainProb >= 40) {
-        rainAdvice =
-            'Bugün yağmur bekleniyor (%$overallRainProb), dışarı çıkarsan şemsiye al ☔';
-      } else if (overallRainProb >= 25) {
-        rainAdvice =
-            'Gün içinde hafif yağış ihtimali var (%$overallRainProb) 🌦️';
+        rainAdvice = 'Bugün yağmur bekleniyor (%$overallRainProb), şemsiye al ☔';
       } else {
         rainAdvice = 'Bugün yağış beklenmiyor ☀️';
       }
     } else {
-      // HAFTA İÇİ: Sabah 08:00-09:00 ve Akşam 17:00 sonrasına odaklanır
       headlineRainProb = [
         morningRainProb,
         eveningRainProb,
@@ -322,17 +245,11 @@ class MorningWeatherNotificationService with WidgetsBindingObserver {
       final eveningRainy = eveningRainProb >= 35;
 
       if (morningRainy && eveningRainy) {
-        rainAdvice =
-            'Sabah (08-09: %$morningRainProb) ve akşam 17 sonrası (%$eveningRainProb) yağmurlu, şemsiyeni kesin al ☔';
+        rainAdvice = 'Sabah (08-09: %$morningRainProb) ve akşam 17 sonrası (%$eveningRainProb) yağmurlu, şemsiyeni al ☔';
       } else if (morningRainy) {
-        rainAdvice =
-            'Sabah 08-09 arası yağmur var (%$morningRainProb), çıkarken şemsiye al ☔';
+        rainAdvice = 'Sabah 08-09 arası yağmur var (%$morningRainProb), çıkarken şemsiye al ☔';
       } else if (eveningRainy) {
-        rainAdvice =
-            'Akşam 17\'den sonra yağmur bekleniyor (%$eveningRainProb), yanına şemsiye al ☔';
-      } else if (overallRainProb >= 45) {
-        rainAdvice =
-            'Gün ortasında yağmur geçişi olabilir (%$overallRainProb), şemsiye bulundur 🌂';
+        rainAdvice = 'Akşam 17\'den sonra yağmur bekleniyor (%$eveningRainProb), şemsiye al ☔';
       } else {
         rainAdvice = 'Sabah 08-09 ve akşam 17 sonrası yağış beklenmiyor.';
       }
@@ -344,15 +261,13 @@ class MorningWeatherNotificationService with WidgetsBindingObserver {
     return _WeatherBriefingMessage(title: title, body: body);
   }
 
-  /// Test amaçlı anında bildirim gönderir.
   Future<void> sendTestNotificationNow({required String owmApiKey}) async {
     await initializeAndSync(owmApiKey: owmApiKey);
     final prefs = await SharedPreferences.getInstance();
     final cached = prefs.getString(_prefForecastCacheKey);
 
     String title = 'Ankara Bugün 14°C · Yağmur: %65';
-    String body =
-        'Hava soğuk (14°C), mont giy 🧥. Akşam 17\'den sonra yağmur bekleniyor (%65), yanına şemsiye al ☔';
+    String body = 'Hava soğuk (14°C), mont giy 🧥. Akşam 17\'den sonra yağmur bekleniyor (%65), şemsiye al ☔';
 
     if (cached != null && cached.isNotEmpty) {
       try {

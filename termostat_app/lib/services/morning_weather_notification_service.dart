@@ -12,20 +12,14 @@ class MorningWeatherNotificationService with WidgetsBindingObserver {
   static final MorningWeatherNotificationService instance =
       MorningWeatherNotificationService._();
 
-  static const String _city = 'Ankara,TR';
-  static const String _prefForecastCacheKey = 'ankara_5day_forecast_cache_v4';
-  static const String _prefLastFetchMsKey = 'ankara_forecast_last_fetch_ms_v4';
-  static const String _prefEnabledKey = 'morning_weather_briefing_enabled_v4';
+  static const String _prefForecastCacheKey = 'ankara_forecast_hourly_cache_v5';
   static const int _baseNotificationId = 7070;
 
   final FlutterLocalNotificationsPlugin _notifications =
       FlutterLocalNotificationsPlugin();
   bool _initialized = false;
-  String _apiKey = '';
 
-  Future<void> initializeAndSync({required String owmApiKey}) async {
-    _apiKey = owmApiKey.trim();
-
+  Future<void> initializeAndSync({String owmApiKey = ''}) async {
     if (!_initialized) {
       WidgetsBinding.instance.addObserver(this);
       tz.initializeTimeZones();
@@ -47,37 +41,36 @@ class MorningWeatherNotificationService with WidgetsBindingObserver {
           android: androidSettings,
         ),
       );
+
+      final iosImpl = _notifications.resolvePlatformSpecificImplementation<
+          IOSFlutterLocalNotificationsPlugin>();
+      await iosImpl?.requestPermissions(alert: true, badge: true, sound: true);
+
       _initialized = true;
     }
 
     await _scheduleFromCache();
-    if (_apiKey.isNotEmpty) {
-      await refreshForecastAndSchedule(owmApiKey: _apiKey, force: true);
-    }
+    await refreshForecastAndSchedule();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && _apiKey.isNotEmpty) {
-      refreshForecastAndSchedule(owmApiKey: _apiKey, force: true);
+    if (state == AppLifecycleState.resumed) {
+      refreshForecastAndSchedule();
     }
   }
 
-  Future<void> refreshForecastAndSchedule({
-    required String owmApiKey,
-    bool force = false,
-  }) async {
+  Future<void> refreshForecastAndSchedule() async {
     try {
+      // API anahtarı gerektirmeyen doğrudan Ankara (39.9334, 32.8597) saatlik tahmin servisi
       final uri = Uri.parse(
-        'https://api.openweathermap.org/data/2.5/forecast?q=$_city&appid=$owmApiKey&units=metric&lang=tr',
+        'https://api.open-meteo.com/v1/forecast?latitude=39.9334&longitude=32.8597&hourly=temperature_2m,precipitation_probability&timezone=Europe%2FIstanbul&forecast_days=5',
       );
       final response = await http.get(uri).timeout(const Duration(seconds: 8));
       if (response.statusCode != 200) return;
 
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_prefForecastCacheKey, response.body);
-      await prefs.setInt(_prefLastFetchMsKey, DateTime.now().millisecondsSinceEpoch);
-
       await _scheduleFromRawJson(response.body);
     } catch (e) {
       debugPrint('[WeatherBriefing] Fetch error: $e');
@@ -94,9 +87,8 @@ class MorningWeatherNotificationService with WidgetsBindingObserver {
 
   Future<void> _scheduleFromRawJson(String rawJson) async {
     try {
-      final decoded = jsonDecode(rawJson) as Map<String, dynamic>;
-      final list = (decoded['list'] as List?) ?? const [];
-      if (list.isEmpty) return;
+      final slots = _parseSlots(rawJson);
+      if (slots.isEmpty) return;
 
       final now = tz.TZDateTime.now(tz.local);
 
@@ -115,7 +107,7 @@ class MorningWeatherNotificationService with WidgetsBindingObserver {
 
         if (scheduledTime.isBefore(now)) continue;
 
-        final summary = _buildDailyBriefingForDate(list, targetDate);
+        final summary = _buildDailyBriefingForDate(slots, targetDate);
         if (summary == null) continue;
 
         await _notifications.zonedSchedule(
@@ -146,52 +138,48 @@ class MorningWeatherNotificationService with WidgetsBindingObserver {
     }
   }
 
+  List<_ForecastSlot> _parseSlots(String rawJson) {
+    final decoded = jsonDecode(rawJson) as Map<String, dynamic>;
+    final hourly = decoded['hourly'] as Map<String, dynamic>?;
+    if (hourly == null) return const [];
+
+    final times = (hourly['time'] as List?) ?? const [];
+    final temps = (hourly['temperature_2m'] as List?) ?? const [];
+    final pops = (hourly['precipitation_probability'] as List?) ?? const [];
+
+    final result = <_ForecastSlot>[];
+    final count = [times.length, temps.length, pops.length]
+        .reduce((a, b) => a < b ? a : b);
+
+    for (int i = 0; i < count; i++) {
+      final dt = DateTime.tryParse(times[i].toString());
+      if (dt == null) continue;
+      final t = (temps[i] as num?)?.toDouble() ?? 15.0;
+      final p = (pops[i] as num?)?.toInt() ?? 0;
+      result.add(_ForecastSlot(dateTime: dt, temp: t, rainProb: p));
+    }
+    return result;
+  }
+
   _WeatherBriefingMessage? _buildDailyBriefingForDate(
-    List<dynamic> forecastList,
+    List<_ForecastSlot> allSlots,
     DateTime targetDate,
   ) {
-    final daySlots = <_ForecastSlot>[];
-
-    for (final raw in forecastList) {
-      if (raw is! Map) continue;
-      final dtSec = (raw['dt'] as num?)?.toInt();
-      if (dtSec == null) continue;
-
-      final localDt =
-          DateTime.fromMillisecondsSinceEpoch(dtSec * 1000, isUtc: true)
-              .add(const Duration(hours: 3));
-
-      if (localDt.year == targetDate.year &&
-          localDt.month == targetDate.month &&
-          localDt.day == targetDate.day) {
-        final main = raw['main'] as Map? ?? const {};
-        final temp = (main['temp'] as num?)?.toDouble() ?? 15.0;
-        final pop = (((raw['pop'] as num?)?.toDouble() ?? 0.0) * 100).round();
-        final weatherArr = (raw['weather'] as List?) ?? const [];
-        final weatherMain = weatherArr.isNotEmpty
-            ? (weatherArr.first['main']?.toString().toLowerCase() ?? '')
-            : '';
-        final isRainCode = weatherMain.contains('rain') ||
-            weatherMain.contains('drizzle') ||
-            weatherMain.contains('thunderstorm');
-
-        daySlots.add(
-          _ForecastSlot(
-            hour: localDt.hour,
-            temp: temp,
-            rainProb: isRainCode && pop < 60 ? 60 : pop,
-          ),
-        );
-      }
-    }
+    final daySlots = allSlots
+        .where((s) =>
+            s.dateTime.year == targetDate.year &&
+            s.dateTime.month == targetDate.month &&
+            s.dateTime.day == targetDate.day)
+        .toList();
 
     if (daySlots.isEmpty) return null;
 
     final isWeekend = targetDate.weekday == DateTime.saturday ||
         targetDate.weekday == DateTime.sunday;
 
-    final daytimeSlots =
-        daySlots.where((s) => s.hour >= 9 && s.hour <= 18).toList();
+    final daytimeSlots = daySlots
+        .where((s) => s.dateTime.hour >= 9 && s.dateTime.hour <= 18)
+        .toList();
     final refSlots = daytimeSlots.isNotEmpty ? daytimeSlots : daySlots;
     final dayMaxTemp =
         refSlots.map((s) => s.temp).reduce((a, b) => a > b ? a : b).round();
@@ -207,14 +195,16 @@ class MorningWeatherNotificationService with WidgetsBindingObserver {
 
     int morningRainProb = 0;
     for (final s in daySlots) {
-      if (s.hour >= 6 && s.hour <= 10 && s.rainProb > morningRainProb) {
+      if (s.dateTime.hour >= 8 &&
+          s.dateTime.hour <= 9 &&
+          s.rainProb > morningRainProb) {
         morningRainProb = s.rainProb;
       }
     }
 
     int eveningRainProb = 0;
     for (final s in daySlots) {
-      if (s.hour >= 15 && s.rainProb > eveningRainProb) {
+      if (s.dateTime.hour >= 17 && s.rainProb > eveningRainProb) {
         eveningRainProb = s.rainProb;
       }
     }
@@ -245,11 +235,14 @@ class MorningWeatherNotificationService with WidgetsBindingObserver {
       final eveningRainy = eveningRainProb >= 35;
 
       if (morningRainy && eveningRainy) {
-        rainAdvice = 'Sabah (08-09: %$morningRainProb) ve akşam 17 sonrası (%$eveningRainProb) yağmurlu, şemsiyeni al ☔';
+        rainAdvice =
+            'Sabah (08-09: %$morningRainProb) ve akşam 17 sonrası (%$eveningRainProb) yağmurlu, şemsiyeni al ☔';
       } else if (morningRainy) {
-        rainAdvice = 'Sabah 08-09 arası yağmur var (%$morningRainProb), çıkarken şemsiye al ☔';
+        rainAdvice =
+            'Sabah 08-09 arası yağmur var (%$morningRainProb), çıkarken şemsiye al ☔';
       } else if (eveningRainy) {
-        rainAdvice = 'Akşam 17\'den sonra yağmur bekleniyor (%$eveningRainProb), şemsiye al ☔';
+        rainAdvice =
+            'Akşam 17\'den sonra yağmur bekleniyor (%$eveningRainProb), şemsiye al ☔';
       } else {
         rainAdvice = 'Sabah 08-09 ve akşam 17 sonrası yağış beklenmiyor.';
       }
@@ -261,19 +254,19 @@ class MorningWeatherNotificationService with WidgetsBindingObserver {
     return _WeatherBriefingMessage(title: title, body: body);
   }
 
-  Future<void> sendTestNotificationNow({required String owmApiKey}) async {
+  Future<void> sendTestNotificationNow({String owmApiKey = ''}) async {
     await initializeAndSync(owmApiKey: owmApiKey);
     final prefs = await SharedPreferences.getInstance();
     final cached = prefs.getString(_prefForecastCacheKey);
 
     String title = 'Ankara Bugün 14°C · Yağmur: %65';
-    String body = 'Hava soğuk (14°C), mont giy 🧥. Akşam 17\'den sonra yağmur bekleniyor (%65), şemsiye al ☔';
+    String body =
+        'Hava soğuk (14°C), mont giy 🧥. Akşam 17\'den sonra yağmur bekleniyor (%65), şemsiye al ☔';
 
     if (cached != null && cached.isNotEmpty) {
       try {
-        final decoded = jsonDecode(cached) as Map<String, dynamic>;
-        final list = (decoded['list'] as List?) ?? const [];
-        final msg = _buildDailyBriefingForDate(list, DateTime.now());
+        final slots = _parseSlots(cached);
+        final msg = _buildDailyBriefingForDate(slots, DateTime.now());
         if (msg != null) {
           title = msg.title;
           body = msg.body;
@@ -303,12 +296,12 @@ class MorningWeatherNotificationService with WidgetsBindingObserver {
 }
 
 class _ForecastSlot {
-  final int hour;
+  final DateTime dateTime;
   final double temp;
   final int rainProb;
 
   const _ForecastSlot({
-    required this.hour,
+    required this.dateTime,
     required this.temp,
     required this.rainProb,
   });

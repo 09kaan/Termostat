@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:webview_flutter/webview_flutter.dart';
@@ -20,6 +22,7 @@ class Bedroom3DCard extends StatefulWidget {
   final double height;
   final bool isHeating;
   final bool initialCeilingOn;
+  final bool initialFloorLampOn;
   final List<SelectableBedroomBulb> availableBulbs;
   final Future<void> Function(
     String bulbId,
@@ -31,7 +34,8 @@ class Bedroom3DCard extends StatefulWidget {
     super.key,
     this.height = 340,
     this.isHeating = false,
-    this.initialCeilingOn = true,
+    this.initialCeilingOn = false,
+    this.initialFloorLampOn = false,
     this.availableBulbs = const [],
     this.onTriggerBulb,
   });
@@ -48,8 +52,8 @@ class _Bedroom3DCardState extends State<Bedroom3DCard> {
 
   late final WebViewController _controller;
   bool _pageLoaded = false;
-  bool _ceilingOn = true;
-  bool _nightstandOn = true;
+  bool _ceilingOn = false;
+  bool _nightstandOn = false;
   String? _ceilingBulbId;
   String? _nightstandBulbId;
   String? _savedLayoutJson;
@@ -58,6 +62,7 @@ class _Bedroom3DCardState extends State<Bedroom3DCard> {
   void initState() {
     super.initState();
     _ceilingOn = widget.initialCeilingOn;
+    _nightstandOn = widget.initialFloorLampOn;
     _initController();
     _loadSavedBindings();
   }
@@ -98,7 +103,6 @@ class _Bedroom3DCardState extends State<Bedroom3DCard> {
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(const Color(0xFF18191D))
-      // HTML'deki notifyFlutter fonksiyonu FlutterRoomChannel kullanır:
       ..addJavaScriptChannel(
         'FlutterRoomChannel',
         onMessageReceived: (JavaScriptMessage message) {
@@ -117,7 +121,6 @@ class _Bedroom3DCardState extends State<Bedroom3DCard> {
             if (!mounted) return;
             setState(() => _pageLoaded = true);
             await _syncSceneState(includeLayout: true);
-            // ES Module (Three.js) asenkron yüklendiği için kısa gecikmelerle tekrar senkronize et
             Future<void>.delayed(const Duration(milliseconds: 350), () {
               if (mounted) _syncSceneState(includeLayout: true);
             });
@@ -138,9 +141,12 @@ class _Bedroom3DCardState extends State<Bedroom3DCard> {
     if (oldWidget.isHeating != widget.isHeating) {
       needsSync = true;
     }
-    if (oldWidget.initialCeilingOn != widget.initialCeilingOn &&
-        widget.initialCeilingOn != _ceilingOn) {
+    if (oldWidget.initialCeilingOn != widget.initialCeilingOn) {
       _ceilingOn = widget.initialCeilingOn;
+      needsSync = true;
+    }
+    if (oldWidget.initialFloorLampOn != widget.initialFloorLampOn) {
+      _nightstandOn = widget.initialFloorLampOn;
       needsSync = true;
     }
     if (needsSync) {
@@ -336,7 +342,14 @@ class _Bedroom3DCardState extends State<Bedroom3DCard> {
         child: Stack(
           children: [
             Positioned.fill(
-              child: WebViewWidget(controller: _controller),
+              child: WebViewWidget(
+                controller: _controller,
+                gestureRecognizers: {
+                  Factory<OneSequenceGestureRecognizer>(
+                    () => EagerGestureRecognizer(),
+                  ),
+                },
+              ),
             ),
             if (!_pageLoaded)
               const Positioned.fill(
@@ -344,7 +357,6 @@ class _Bedroom3DCardState extends State<Bedroom3DCard> {
                   child: CircularProgressIndicator(),
                 ),
               ),
-            // Sol alt: Kalorifer ısıtma durumu rozeti (Üstteki HTML barını kapatmaması için sol altta)
             if (widget.isHeating)
               Positioned(
                 bottom: 10,
@@ -385,7 +397,6 @@ class _Bedroom3DCardState extends State<Bedroom3DCard> {
                   ),
                 ),
               ),
-            // Sağ alt: Ampul Eşleştirme butonu (Üstteki HTML barını kapatmaması için sağ altta)
             Positioned(
               bottom: 10,
               right: 10,

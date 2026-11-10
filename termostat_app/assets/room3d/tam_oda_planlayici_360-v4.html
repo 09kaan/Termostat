@@ -6,7 +6,7 @@
   <title>3B Yatak Odası Planlayıcı v4 (Eşya Kilitleme + Akıllı Ampul Tetikleme)</title>
   <style>
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-    body { margin: 0; background: #18191d; color: #fff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; overflow: hidden; user-select: none; }
+    body { margin: 0; background: #18191d; color: #fff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; overflow: hidden; user-select: none; touch-action: none; }
     
     /* Üst Hızlı Kontrol Çubuğu (Mobil & Harita Odası Görünümü İçin) */
     #top-bar {
@@ -75,7 +75,7 @@
       border-radius: 20px; font-size: 11.5px; pointer-events: none;
       opacity: 0; transition: opacity 0.25s; z-index: 30; border: 1px solid rgba(255,255,255,0.12);
     }
-    canvas { display: block; width: 100vw; height: 100vh; }
+    canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
   </style>
 </head>
 <body>
@@ -85,8 +85,8 @@
       <button id="btnTogglePanel" class="top-btn" title="Eşya listesini ve ayarları göster/gizle">🛠️ Düzenle</button>
     </div>
     <div class="bar-group">
-      <button id="btnCeilingLight" class="top-btn light-on">💡 Tavan</button>
-      <button id="btnFloorLamp" class="top-btn light-on">🛋️ Abajur</button>
+      <button id="btnCeilingLight" class="top-btn">💡 Tavan</button>
+      <button id="btnFloorLamp" class="top-btn">🛋️ Abajur</button>
       <button id="btnDoorToggle" class="top-btn">🚪 Kapı</button>
     </div>
   </div>
@@ -1055,6 +1055,10 @@
       camera.updateProjectionMatrix();
       renderer.setSize(window.innerWidth, window.innerHeight);
     });
+
+    setCeilingLight(false, true);
+    setFloorLamp(false, true);
+    notifyFlutter({ type: 'sceneReady' });
 
     function animate() {
       requestAnimationFrame(animate);

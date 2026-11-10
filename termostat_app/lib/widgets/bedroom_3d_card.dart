@@ -44,15 +44,15 @@ class _Bedroom3DCardState extends State<Bedroom3DCard> {
   static const String _prefCeilingBulbKey = 'bedroom_3d_ceiling_bulb_id_v2';
   static const String _prefNightstandBulbKey =
       'bedroom_3d_nightstand_bulb_id_v2';
-  static const String _prefLayoutLockKey = 'bedroom_3d_layout_locked_v2';
+  static const String _prefSavedLayoutJsonKey = 'bedroom_3d_saved_layout_v4';
 
   late final WebViewController _controller;
   bool _pageLoaded = false;
-  bool _layoutLocked = true;
   bool _ceilingOn = true;
-  bool _nightstandOn = false;
+  bool _nightstandOn = true;
   String? _ceilingBulbId;
   String? _nightstandBulbId;
+  String? _savedLayoutJson;
 
   @override
   void initState() {
@@ -67,15 +67,15 @@ class _Bedroom3DCardState extends State<Bedroom3DCard> {
       final prefs = await SharedPreferences.getInstance();
       final savedCeiling = prefs.getString(_prefCeilingBulbKey);
       final savedNight = prefs.getString(_prefNightstandBulbKey);
-      final savedLock = prefs.getBool(_prefLayoutLockKey) ?? true;
+      final savedLayout = prefs.getString(_prefSavedLayoutJsonKey);
       if (!mounted) return;
       setState(() {
         _ceilingBulbId = savedCeiling;
         _nightstandBulbId = savedNight;
-        _layoutLocked = savedLock;
+        _savedLayoutJson = savedLayout;
       });
       _resolveDefaultBulbsIfNeeded();
-      await _syncSceneState();
+      await _syncSceneState(includeLayout: true);
     } catch (_) {
       _resolveDefaultBulbsIfNeeded();
     }
@@ -97,7 +97,14 @@ class _Bedroom3DCardState extends State<Bedroom3DCard> {
   void _initController() {
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(const Color(0xFF0F1319))
+      ..setBackgroundColor(const Color(0xFF18191D))
+      // HTML'deki notifyFlutter fonksiyonu FlutterRoomChannel kullanır:
+      ..addJavaScriptChannel(
+        'FlutterRoomChannel',
+        onMessageReceived: (JavaScriptMessage message) {
+          _handleJsMessage(message.message);
+        },
+      )
       ..addJavaScriptChannel(
         'FlutterRoomBridge',
         onMessageReceived: (JavaScriptMessage message) {
@@ -109,7 +116,14 @@ class _Bedroom3DCardState extends State<Bedroom3DCard> {
           onPageFinished: (_) async {
             if (!mounted) return;
             setState(() => _pageLoaded = true);
-            await _syncSceneState();
+            await _syncSceneState(includeLayout: true);
+            // ES Module (Three.js) asenkron yüklendiği için kısa gecikmelerle tekrar senkronize et
+            Future<void>.delayed(const Duration(milliseconds: 350), () {
+              if (mounted) _syncSceneState(includeLayout: true);
+            });
+            Future<void>.delayed(const Duration(milliseconds: 900), () {
+              if (mounted) _syncSceneState(includeLayout: false);
+            });
           },
         ),
       )
@@ -130,27 +144,29 @@ class _Bedroom3DCardState extends State<Bedroom3DCard> {
       needsSync = true;
     }
     if (needsSync) {
-      unawaited(_syncSceneState());
+      unawaited(_syncSceneState(includeLayout: false));
     }
   }
 
-  Future<void> _syncSceneState() async {
+  Future<void> _syncSceneState({bool includeLayout = false}) async {
     if (!_pageLoaded) return;
-    final heatingBool = widget.isHeating ? 'true' : 'false';
-    final ceilingBool = _ceilingOn ? 'true' : 'false';
-    final nightBool = _nightstandOn ? 'true' : 'false';
-    final lockBool = _layoutLocked ? 'true' : 'false';
+    final payload = <String, dynamic>{
+      'ceilingOn': _ceilingOn,
+      'floorLampOn': _nightstandOn,
+      'isHeating': widget.isHeating,
+    };
+    if (includeLayout &&
+        _savedLayoutJson != null &&
+        _savedLayoutJson!.isNotEmpty) {
+      try {
+        payload['savedLayout'] = jsonDecode(_savedLayoutJson!);
+      } catch (_) {}
+    }
+    final encoded = jsonEncode(payload);
     final js = '''
       try {
-        if (typeof window.setHeatingGlow === 'function') {
-          window.setHeatingGlow($heatingBool);
-        }
-        if (typeof window.setRoomLightState === 'function') {
-          window.setRoomLightState('ceiling', $ceilingBool);
-          window.setRoomLightState('nightstand', $nightBool);
-        }
-        if (typeof window.setLayoutLocked === 'function') {
-          window.setLayoutLocked($lockBool);
+        if (typeof window.syncFromFlutter === 'function') {
+          window.syncFromFlutter($encoded);
         }
       } catch (e) {}
     ''';
@@ -164,19 +180,32 @@ class _Bedroom3DCardState extends State<Bedroom3DCard> {
       final data = jsonDecode(raw);
       if (data is! Map) return;
       final type = data['type']?.toString() ?? '';
+
       if (type == 'sceneReady') {
-        unawaited(_syncSceneState());
+        unawaited(_syncSceneState(includeLayout: true));
         return;
       }
-      if (type == 'lightToggled' || type == 'toggleLight') {
-        final fixture = (data['fixture'] ?? data['target'] ?? 'ceiling')
+
+      if (type == 'layout_saved' && data['data'] is Map) {
+        final layoutStr = jsonEncode(data['data']);
+        _savedLayoutJson = layoutStr;
+        SharedPreferences.getInstance().then((prefs) {
+          prefs.setString(_prefSavedLayoutJsonKey, layoutStr);
+        });
+        return;
+      }
+
+      if (type == 'light_toggle' ||
+          type == 'lightToggled' ||
+          type == 'toggleLight') {
+        final fixture = (data['fixture'] ?? data['target'] ?? 'ceiling_light')
             .toString()
             .toLowerCase();
-        final isOn = data['state'] == true || data['isOn'] == true;
+        final isOn = data['isOn'] == true || data['state'] == true;
         _resolveDefaultBulbsIfNeeded();
         String? targetBulbId;
-        if (fixture.contains('night') ||
-            fixture.contains('floor') ||
+        if (fixture.contains('floor') ||
+            fixture.contains('night') ||
             fixture.contains('abajur') ||
             fixture.contains('desk')) {
           _nightstandOn = isOn;
@@ -195,16 +224,6 @@ class _Bedroom3DCardState extends State<Bedroom3DCard> {
         }
       }
     } catch (_) {}
-  }
-
-  Future<void> _toggleLock() async {
-    final next = !_layoutLocked;
-    setState(() => _layoutLocked = next);
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool(_prefLayoutLockKey, next);
-    } catch (_) {}
-    await _syncSceneState();
   }
 
   Future<void> _openBulbPickerSheet() async {
@@ -243,7 +262,7 @@ class _Bedroom3DCardState extends State<Bedroom3DCard> {
                             ? _ceilingBulbId
                             : bulbs.first.id,
                         decoration: const InputDecoration(
-                          labelText: 'Tavan Lambası (3B Sahne)',
+                          labelText: '💡 Tavan Lambası (3B Sahne)',
                           prefixIcon: Icon(Icons.light),
                         ),
                         items: [
@@ -268,7 +287,7 @@ class _Bedroom3DCardState extends State<Bedroom3DCard> {
                             ? _nightstandBulbId
                             : bulbs.first.id,
                         decoration: const InputDecoration(
-                          labelText: 'Komodin Abajuru (3B Sahne)',
+                          labelText: '🛋️ Üç Ayaklı Abajur (3B Sahne)',
                           prefixIcon: Icon(Icons.wb_incandescent_outlined),
                         ),
                         items: [
@@ -305,11 +324,11 @@ class _Bedroom3DCardState extends State<Bedroom3DCard> {
       child: Container(
         height: widget.height,
         decoration: BoxDecoration(
-          color: const Color(0xFF0F1319),
+          color: const Color(0xFF18191D),
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
             color: widget.isHeating
-                ? const Color(0xFFFF5722).withValues(alpha: 0.65)
+                ? const Color(0xFFFF5722).withValues(alpha: 0.75)
                 : Colors.white12,
             width: widget.isHeating ? 1.8 : 1.0,
           ),
@@ -325,120 +344,83 @@ class _Bedroom3DCardState extends State<Bedroom3DCard> {
                   child: CircularProgressIndicator(),
                 ),
               ),
-            // Sol üst: Kalorifer ısıtma durumu rozeti
+            // Sol alt: Kalorifer ısıtma durumu rozeti (Üstteki HTML barını kapatmaması için sol altta)
             if (widget.isHeating)
               Positioned(
-                top: 10,
+                bottom: 10,
                 left: 10,
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFD84315).withValues(alpha: 0.88),
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: const [
-                      BoxShadow(
-                        color: Color(0x88FF3D00),
-                        blurRadius: 10,
-                      ),
-                    ],
-                  ),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        Icons.local_fire_department,
-                        color: Colors.white,
-                        size: 15,
-                      ),
-                      SizedBox(width: 4),
-                      Text(
-                        'Kalorifer Isıtıyor',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.w600,
+                child: IgnorePointer(
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFD84315).withValues(alpha: 0.90),
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x88FF3D00),
+                          blurRadius: 10,
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.local_fire_department,
+                          color: Colors.white,
+                          size: 15,
+                        ),
+                        SizedBox(width: 4),
+                        Text(
+                          'Kalorifer Isıtıyor',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
-            // Sağ üst: Kilit ve Ampul Eşleştirme butonları
+            // Sağ alt: Ampul Eşleştirme butonu (Üstteki HTML barını kapatmaması için sağ altta)
             Positioned(
-              top: 10,
+              bottom: 10,
               right: 10,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Material(
-                    color: Colors.black54,
-                    borderRadius: BorderRadius.circular(10),
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(10),
-                      onTap: _toggleLock,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 9,
-                          vertical: 6,
+              child: Material(
+                color: const Color(0xDD121216),
+                borderRadius: BorderRadius.circular(10),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(10),
+                  onTap: _openBulbPickerSheet,
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.lightbulb_outline,
+                          color: Colors.amberAccent,
+                          size: 15,
                         ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              _layoutLocked ? Icons.lock : Icons.lock_open,
-                              color: _layoutLocked
-                                  ? Colors.amberAccent
-                                  : Colors.white70,
-                              size: 15,
-                            ),
-                            const SizedBox(width: 4),
-                            Text(
-                              _layoutLocked ? 'Kilitli' : 'Düzenle',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 11.5,
-                              ),
-                            ),
-                          ],
+                        SizedBox(width: 4),
+                        Text(
+                          'Ampul Eşleştir',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
-                      ),
+                      ],
                     ),
                   ),
-                  const SizedBox(width: 6),
-                  Material(
-                    color: Colors.black54,
-                    borderRadius: BorderRadius.circular(10),
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(10),
-                      onTap: _openBulbPickerSheet,
-                      child: const Padding(
-                        padding: EdgeInsets.symmetric(
-                          horizontal: 9,
-                          vertical: 6,
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              Icons.lightbulb_outline,
-                              color: Colors.amberAccent,
-                              size: 15,
-                            ),
-                            SizedBox(width: 4),
-                            Text(
-                              'Ampuller',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 11.5,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
+                ),
               ),
             ),
           ],

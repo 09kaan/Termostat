@@ -55,7 +55,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
   bool _connected = false;
   Timer? _clock;
   int _serverOffset = 0;
-  bool _timeReady = true;
+  bool _timeReady = false;
   final Set<String> _sending = {};
   final Map<String, int> _writeStarted = {};
   final Map<String, WizAutoRetry> _autoRetries = {};
@@ -75,7 +75,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
       if (!mounted) return;
       _refresh(() {
         _serverOffset = (e.snapshot.value as num?)?.toInt() ?? 0;
-        _timeReady = true;
+        _timeReady = e.snapshot.value is num;
       });
     });
     _connection =
@@ -229,29 +229,12 @@ class WizLightsScreenState extends State<WizLightsScreen> {
 
   Map<String, dynamic> _map(dynamic value) =>
       value is Map ? Map<String, dynamic>.from(value) : <String, dynamic>{};
-  int get _now =>
-      DateTime.now().millisecondsSinceEpoch + (_timeReady ? _serverOffset : 0);
+  int get _now => DateTime.now().millisecondsSinceEpoch + _serverOffset;
   bool _fresh(dynamic stamp, int limitMs) {
-    if (stamp is num) return stamp.toInt() > 0;
-    if (stamp is String && stamp.isNotEmpty) return true;
-    return false;
-  }
-
-  bool _lightReportFresh(
-    Map<String, dynamic> report,
-    Map<String, dynamic> config,
-  ) {
-    if (report.isEmpty) return false;
-    if (report['online'] == false) return false;
-    if (report['ip'] != null &&
-        config['ip'] != null &&
-        report['ip'] != config['ip']) {
-      return false;
-    }
-    final stamp =
-        report['reportedAt'] ?? report['lastSeen'] ?? report['updatedAt'];
-    if (stamp != null) return _fresh(stamp, 90000);
-    return report['online'] == true || report['state'] is bool;
+    if (!_timeReady || stamp is! num) return false;
+    final age = _now - stamp.toInt();
+    final effectiveLimit = limitMs < 300000 ? 300000 : limitMs;
+    return age >= -30000 && age <= effectiveLimit;
   }
 
   void _message(String text) {
@@ -267,7 +250,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
     final uid = _owner;
     if (home == null || uid == null || _sending.contains(id)) return;
     if (FirebaseAuth.instance.currentUser?.uid != uid) return;
-    if (!_connected) {
+    if (!_connected || !_timeReady) {
       _message('Firebase bağlantısı hazır değil.');
       return;
     }
@@ -287,19 +270,20 @@ class WizLightsScreenState extends State<WizLightsScreen> {
           ip: ip,
         );
       }
-      // ServerValue.timestamp ensures Firebase .validate rules (now - 60000 .. now + 5000) never reject the write.
+      // These are absolute, idempotent values, never toggle commands.
       await ref.set({
         'id': commandId,
         'issuedAt': ServerValue.timestamp,
-        'requestedAt': ServerValue.timestamp,
+        'requestedAt': _now,
         'ttlMs': 60000,
         'params': params,
       });
-    } catch (e) {
+      // The inline state gives immediate feedback; no queued success snackbar.
+    } catch (_) {
       if (mounted && generation == _binding) _autoRetries.remove(id);
       if (mounted && generation == _binding)
         _message(
-          'Komut gönderilemedi ($e). İnterneti ve Firebase izinlerini kontrol et.',
+          'Komut gönderilemedi. İnterneti ve Firebase izinlerini kontrol et.',
         );
     } finally {
       if (mounted && generation == _binding)
@@ -567,11 +551,8 @@ class WizLightsScreenState extends State<WizLightsScreen> {
     if (!_dataReady) return const Center(child: CircularProgressIndicator());
     final lights = _map(_map(_homeData['config'])['lights']);
     final status = _map(_homeData['status']);
-    final bridgeMap = _map(status['bridge']);
-    final bridgeOnline = _connected &&
-        (_fresh(bridgeMap['lastSeen'], 90000) ||
-            bridgeMap['online'] == true ||
-            status.isNotEmpty);
+    final bridgeOnline =
+        _connected && _fresh(_map(status['bridge'])['lastSeen'], 90000);
     return content(
       lights,
       _map(status['lights']),
@@ -867,22 +848,21 @@ class WizLightsScreenState extends State<WizLightsScreen> {
   void _retryCommand(String id) {
     final lights = _map(_map(_homeData['config'])['lights']);
     final status = _map(_homeData['status']);
-    final bridgeMap = _map(status['bridge']);
-    final bridgeOnline = _connected &&
-        (_fresh(bridgeMap['lastSeen'], 90000) ||
-            bridgeMap['online'] == true ||
-            status.isNotEmpty);
     final config = _map(lights[id]);
     final report = _map(_map(status['lights'])[id]);
     final command = _map(_map(_homeData['commands'])[id]);
-    final current = _connected && bridgeOnline && _lightReportFresh(report, config);
+    final current = _connected &&
+        report['online'] == true &&
+        report['ip'] == config['ip'] &&
+        _fresh(report['reportedAt'], 90000);
     final feedback = _commandFeedback(id, command, report, current);
     if (config.isEmpty ||
         !_connected ||
         _dataError ||
-        !bridgeOnline ||
+        !_fresh(_map(status['bridge'])['lastSeen'], 90000) ||
         !feedback.retryable ||
         _sending.contains(id)) return;
+    // Repeat the same absolute values. NEVER invert an unconfirmed old state.
     _send(id, feedback.params);
   }
 
@@ -898,8 +878,11 @@ class WizLightsScreenState extends State<WizLightsScreen> {
     final config = _map(lights[id]),
         report = _map(reported[id]),
         command = _map(commands[id]);
-    final fresh =
-        _connected && bridgeOnline && _lightReportFresh(report, config);
+    final fresh = _connected &&
+        bridgeOnline &&
+        report['online'] == true &&
+        report['ip'] == config['ip'] &&
+        _fresh(report['reportedAt'], 90000);
     final feedback = _commandFeedback(id, command, report, fresh);
     final pending = feedback.pending;
     final bool? on =
@@ -910,7 +893,11 @@ class WizLightsScreenState extends State<WizLightsScreen> {
       pending: pending,
       retryable: feedback.retryable,
       feedback: feedback.message,
-      controllable: !_dataError && _connected && bridgeOnline && !_sending.contains(id),
+      controllable: (on != null || feedback.retryable) &&
+          !_dataError &&
+          _connected &&
+          bridgeOnline &&
+          !pending,
     );
   }
 
@@ -918,11 +905,8 @@ class WizLightsScreenState extends State<WizLightsScreen> {
     // Re-read the current report/time at tap, not a possibly stale paint frame.
     final lights = _map(_map(_homeData['config'])['lights']);
     final status = _map(_homeData['status']);
-    final bridgeMap = _map(status['bridge']);
-    final bridge = _connected &&
-        (_fresh(bridgeMap['lastSeen'], 90000) ||
-            bridgeMap['online'] == true ||
-            status.isNotEmpty);
+    final bridge =
+        _connected && _fresh(_map(status['bridge'])['lastSeen'], 90000);
     final state = _fixtureState(
       fixture,
       lights,
@@ -934,8 +918,8 @@ class WizLightsScreenState extends State<WizLightsScreen> {
     if (id != null && state.controllable) {
       if (state.retryable) {
         _retryCommand(id);
-      } else {
-        _send(id, {'state': !(state.on ?? false)});
+      } else if (state.on != null) {
+        _send(id, {'state': !state.on!});
       }
     }
   }
@@ -1189,7 +1173,8 @@ class WizLightsScreenState extends State<WizLightsScreen> {
       final enabled = id != null &&
           state.controllable &&
           _connected &&
-          bridgeOnline;
+          bridgeOnline &&
+          !state.pending;
       final sensor = thermostat.thermostat;
       final hasReading = room.sensor &&
           sensor != null &&
@@ -1354,7 +1339,10 @@ class WizLightsScreenState extends State<WizLightsScreen> {
     bool allowRemove = true,
   }) {
     final name = config['name'] as String? ?? 'Ampul';
-    final fresh = bridgeOnline && _lightReportFresh(report, config);
+    final fresh = bridgeOnline &&
+        report['online'] == true &&
+        report['ip'] == config['ip'] &&
+        _fresh(report['reportedAt'], 90000);
     final knownState = fresh && report['state'] is bool;
     final feedback = _commandFeedback(id, command, report, fresh);
     final pending = feedback.pending;
@@ -1368,8 +1356,10 @@ class WizLightsScreenState extends State<WizLightsScreen> {
                 : 'Durum bilinmiyor');
     final enabled = !_dataError &&
         _connected &&
+        _timeReady &&
         bridgeOnline &&
-        !_sending.contains(id);
+        !_sending.contains(id) &&
+        !pending;
     final brightness = report['dimming'] is num
         ? (report['dimming'] as num).toDouble().clamp(10.0, 100.0).toDouble()
         : 50.0;

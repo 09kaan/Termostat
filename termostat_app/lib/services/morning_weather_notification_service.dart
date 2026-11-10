@@ -7,12 +7,9 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/data/latest_all.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 
-/// Ankara için 5 günlük / saatlik hava durumu tahminlerini:
-/// 1) Uygulama açıldığında, ön plana geldiğinde ve arka planda her 3 saatte bir (akşamları dahil) çeker,
-/// 2) Wi-Fi / internet kesintilerine karşı SharedPreferences içine yerel olarak depolar,
-/// 3) Önümüzdeki 5 günün sabah 07:00 bildirimlerini işletim sistemine (zonedSchedule) önceden kaydeder,
-/// 4) Test butonuna basıldığında önce güncel veriyi çekmeyi dener (internet yoksa depolanan veriyi kullanır)
-///    ve hem anlık hem de 4 saniye gecikmeli bildirim tetikler.
+/// Geolocation ve mevcut NotificationsService ile ÇAKIŞMAMASI için
+/// FlutterLocalNotificationsPlugin.initialize() tekrar çağrılmaz
+/// (main.dart içindeki notificationsService.initialize() zaten başlatır).
 class MorningWeatherNotificationService with WidgetsBindingObserver {
   MorningWeatherNotificationService._();
   static final MorningWeatherNotificationService instance =
@@ -34,7 +31,6 @@ class MorningWeatherNotificationService with WidgetsBindingObserver {
       presentList: true,
       presentBadge: true,
       presentSound: true,
-      interruptionLevel: InterruptionLevel.timeSensitive,
     ),
     android: AndroidNotificationDetails(
       'ankara_morning_weather_channel',
@@ -54,39 +50,6 @@ class MorningWeatherNotificationService with WidgetsBindingObserver {
         tz.setLocalLocation(tz.getLocation('Europe/Istanbul'));
       } catch (_) {}
 
-      const iosSettings = DarwinInitializationSettings(
-        requestAlertPermission: true,
-        requestBadgePermission: true,
-        requestSoundPermission: true,
-        defaultPresentAlert: true,
-        defaultPresentBanner: true,
-        defaultPresentList: true,
-        defaultPresentSound: true,
-      );
-      const androidSettings =
-          AndroidInitializationSettings('@mipmap/ic_launcher');
-
-      try {
-        await _notifications.initialize(
-          const InitializationSettings(
-            iOS: iosSettings,
-            android: androidSettings,
-          ),
-        );
-      } catch (e) {
-        debugPrint('[WeatherBriefing] Init warning: $e');
-      }
-
-      try {
-        final iosImpl = _notifications.resolvePlatformSpecificImplementation<
-            IOSFlutterLocalNotificationsPlugin>();
-        await iosImpl?.requestPermissions(
-          alert: true,
-          badge: true,
-          sound: true,
-        );
-      } catch (_) {}
-
       _periodicSyncTimer?.cancel();
       _periodicSyncTimer = Timer.periodic(
         const Duration(hours: 3),
@@ -96,9 +59,7 @@ class MorningWeatherNotificationService with WidgetsBindingObserver {
       _initialized = true;
     }
 
-    // Önce yerel depodaki (offline cache) veriden 5 günlük 07:00 bildirimlerini kur
     await _scheduleFromCache();
-    // Ardından internet varsa güncel 5 günlük veriyi çekip depola ve bildirimleri güncelle
     unawaited(refreshForecastAndSchedule(owmApiKey: owmApiKey, force: true));
   }
 
@@ -161,7 +122,6 @@ class MorningWeatherNotificationService with WidgetsBindingObserver {
 
       final now = tz.TZDateTime.now(tz.local);
 
-      // 5 günlük tahminleri işletim sistemine kaydet (Wi-Fi kesilse bile sabah 07:00'de çalar)
       for (int dayOffset = 0; dayOffset < 5; dayOffset++) {
         final targetDate = DateTime(now.year, now.month, now.day)
             .add(Duration(days: dayOffset));
@@ -235,7 +195,6 @@ class MorningWeatherNotificationService with WidgetsBindingObserver {
     final isWeekend = targetDate.weekday == DateTime.saturday ||
         targetDate.weekday == DateTime.sunday;
 
-    // Sabah hissedilen değil, gün içi normal sıcaklık (09:00 - 18:00)
     final daytimeSlots = daySlots
         .where((s) => s.dateTime.hour >= 9 && s.dateTime.hour <= 18)
         .toList();
@@ -252,7 +211,6 @@ class MorningWeatherNotificationService with WidgetsBindingObserver {
       coatAdvice = 'Hava iyi ($dayMaxTemp°C), mont gerekmez 🤵';
     }
 
-    // Hafta içi işe gidiş (08:00 - 09:00) ve işten çıkış (17:00 sonrası)
     int morningRainProb = 0;
     for (final s in daySlots) {
       if (s.dateTime.hour >= 8 &&
@@ -320,7 +278,6 @@ class MorningWeatherNotificationService with WidgetsBindingObserver {
         await initializeAndSync(owmApiKey: owmApiKey);
       }
 
-      // Test butonuna basıldığında hemen güncel veriyi çekmeyi dene; Wi-Fi yoksa depodaki veriyi kullan
       await refreshForecastAndSchedule(owmApiKey: owmApiKey, force: true);
 
       final prefs = await SharedPreferences.getInstance();
@@ -341,7 +298,6 @@ class MorningWeatherNotificationService with WidgetsBindingObserver {
         } catch (_) {}
       }
 
-      // 1) Anında bildirim gönder
       await _notifications.show(
         7098,
         title,
@@ -349,7 +305,6 @@ class MorningWeatherNotificationService with WidgetsBindingObserver {
         _notifDetails,
       );
 
-      // 2) 4 saniye sonrasına zamanlı bildirim kur (Uygulamayı arka plana attığında / ekranı kilitlediğinde de kesin görünür)
       final nowTz = tz.TZDateTime.now(tz.local).add(const Duration(seconds: 4));
       await _notifications.zonedSchedule(
         7099,

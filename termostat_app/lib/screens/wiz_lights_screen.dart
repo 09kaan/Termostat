@@ -1198,10 +1198,9 @@ class WizLightsScreenState extends State<WizLightsScreen> {
       final isBedroom = _isBedroomRoom(room.id, room.name);
       final isHeating = thermostat.heatingFeedback.relay == RelayState.on ||
           (sensor != null &&
-              (sensor.isHeating ||
-                  (sensor.currentTemperature.isFinite &&
-                      sensor.targetTemperature.isFinite &&
-                      sensor.targetTemperature > sensor.currentTemperature)));
+              sensor.currentTemperature.isFinite &&
+              sensor.targetTemperature.isFinite &&
+              sensor.targetTemperature > sensor.currentTemperature);
 
       child = Column(
         key: ValueKey('detail-$roomId'),

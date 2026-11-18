@@ -15,6 +15,8 @@ class ThermostatProvider with ChangeNotifier {
   StreamSubscription<DatabaseEvent>? _deviceSub, _connectionSub, _offsetSub;
   StreamSubscription<User?>? _authSub;
   Timer? _feedbackClock;
+  Timer? _tempDebounceTimer;
+  double? _optimisticTargetTemp;
   bool _connected = false, _timeReady = false;
   int _serverOffset = 0, _generation = 0;
   String? _pendingControlId;
@@ -106,9 +108,38 @@ class ThermostatProvider with ChangeNotifier {
     }
   }
 
-  Future<void> updateTemperature(double temperature) =>
-      updateControl(temperature: temperature);
-  Future<void> updateMode(String mode) => updateControl(mode: mode);
+  /// Hedef sıcaklığı arayüzde 0 ms gecikmeyle anında günceller (Optimistic UI)
+  /// ve kullanıcı tuşa basmayı bıraktıktan 600 ms sonra sadece en son değeri
+  /// tek seferde Firebase/ESP32'ye gönderir (Debounce).
+  Future<void> updateTemperature(double temperature) {
+    if (!temperature.isFinite || temperature < 10 || temperature > 30) {
+      return Future<void>.error(ArgumentError.value(temperature));
+    }
+    if (_thermostat == null) return Future<void>.value();
+
+    _optimisticTargetTemp = temperature;
+    _thermostat = _thermostat!.copyWith(targetTemperature: temperature);
+    notifyListeners();
+
+    final generation = _generation;
+    _tempDebounceTimer?.cancel();
+    _tempDebounceTimer = Timer(const Duration(milliseconds: 600), () {
+      if (_disposed || generation != _generation) return;
+      final finalTemp = _optimisticTargetTemp;
+      if (finalTemp != null) {
+        unawaited(updateControl(temperature: finalTemp));
+      }
+    });
+    return Future<void>.value();
+  }
+
+  Future<void> updateMode(String mode) {
+    if (_thermostat != null && const {'on', 'off', 'manual'}.contains(mode)) {
+      _thermostat = _thermostat!.copyWith(mode: mode);
+      notifyListeners();
+    }
+    return updateControl(mode: mode);
+  }
 
   Future<void> updateControl({String? mode, double? temperature}) {
     if (mode != null && !const {'on', 'off', 'manual'}.contains(mode)) {
@@ -126,18 +157,28 @@ class ThermostatProvider with ChangeNotifier {
       final effectiveMode = mode ?? previousMode;
       final effectiveTemp = temperature ?? _thermostat!.targetTemperature;
 
-      // 1. Ev ağında ESP32 IP'si tanımlıysa yerel ağdan milisaniyeler içinde ilet
+      // 1. Ev ağında ESP32 IP'si tanımlıysa yerel ağdan ilet (çevrimiçi iken bulutu bekletme)
       bool sentOverLan = false;
       if (_lanService.espLocalIp != null) {
-        sentOverLan = await _lanService.sendLocalCommand(
-          mode: mode,
-          targetTemp: temperature,
-        );
+        if (!_connected) {
+          sentOverLan = await _lanService.sendLocalCommand(
+            mode: mode,
+            targetTemp: temperature,
+          );
+        } else {
+          unawaited(
+            _lanService.sendLocalCommand(
+              mode: mode,
+              targetTemp: temperature,
+            ),
+          );
+        }
       }
 
       // 2. İnternet/Firebase yoksa ve LAN başarılıysa yerel state'i anında güncelle
       if (!_connected && sentOverLan) {
         _lanService.setOfflineMode(true);
+        _optimisticTargetTemp = null;
         _thermostat = _thermostat!.copyWith(
           mode: effectiveMode,
           targetTemperature: effectiveTemp,
@@ -165,6 +206,7 @@ class ThermostatProvider with ChangeNotifier {
       try {
         await _database.child('devices/${_thermostat!.id}').update(updates);
         if (generation != _generation) return;
+        _optimisticTargetTemp = null;
 
         // Sadece mod gerçekten değiştiğinde (on <-> off/manual) log kaydı ekle
         if (mode != null && mode != previousMode) {
@@ -181,6 +223,7 @@ class ThermostatProvider with ChangeNotifier {
         _error = null;
       } catch (e) {
         if (generation == _generation) {
+          _optimisticTargetTemp = null;
           if (sentOverLan) {
             _lanService.setOfflineMode(true);
             _thermostat = _thermostat!.copyWith(
@@ -247,7 +290,14 @@ class ThermostatProvider with ChangeNotifier {
       final data = Map<String, dynamic>.from(event.snapshot.value as Map)
         ..['id'] = device;
       _raw = data;
-      _thermostat = Thermostat.fromJson(data);
+      var parsed = Thermostat.fromJson(data);
+      // Kullanıcı hâlâ +/- tuşlarına basıyorsa buluttan gelen eski derecenin
+      // ekrandaki güncel seçimi geri almasını engelle.
+      if ((_tempDebounceTimer?.isActive ?? false) &&
+          _optimisticTargetTemp != null) {
+        parsed = parsed.copyWith(targetTemperature: _optimisticTargetTemp);
+      }
+      _thermostat = parsed;
       final control = data['control'];
       if (control is Map && control['id'] == _pendingControlId) {
         _pendingControlId = null;
@@ -299,6 +349,9 @@ class ThermostatProvider with ChangeNotifier {
 
   void stopListening() {
     _generation++;
+    _tempDebounceTimer?.cancel();
+    _tempDebounceTimer = null;
+    _optimisticTargetTemp = null;
     _lanService.stopPeriodicCheck();
     _deviceSub?.cancel();
     _connectionSub?.cancel();

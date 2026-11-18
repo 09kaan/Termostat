@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -12,20 +13,26 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../providers/settings_provider.dart';
 import '../models/geofence_diagnostics.dart';
 
-/// iOS is the single command writer, including when Flutter is not running.
-/// If native write fails during Wi-Fi -> Cellular handoff, Flutter automatically
-/// retries and settles the failed automation command.
+/// iOS is the single command writer when online, including when Flutter is closed.
+/// If native write fails because internet is off or transitioning (Wi-Fi -> 5G),
+/// Flutter persists the pending exit/entry command locally and executes it
+/// automatically the moment internet/Firebase reconnects.
 class ThermostatGeofenceService extends ChangeNotifier
     with WidgetsBindingObserver {
   static final ThermostatGeofenceService _instance =
       ThermostatGeofenceService._internal();
   factory ThermostatGeofenceService() => _instance;
   ThermostatGeofenceService._internal();
+
   static const _channel = MethodChannel('geofence_channel');
+  static const _pendingQueuePrefKey = 'pending_geofence_automation_v1';
+  static const int _maxQueueAgeMs = 4 * 60 * 60 * 1000; // 4 saat geçerlilik
+
   bool _isStarted = false;
   bool _isInitialized = false;
   bool _isInsideGeofence = true;
   bool _lanHomeLock = false;
+  bool _firebaseConnected = false;
   GeofenceDiagnostics? _diagnostics;
   Timer? _sampleExpiry;
   bool _observingLifecycle = false;
@@ -34,6 +41,8 @@ class ThermostatGeofenceService extends ChangeNotifier
   bool _retryingFailedAutomation = false;
   SettingsProvider? _settingsProvider;
   StreamSubscription<User?>? _authSubscription;
+  StreamSubscription<DatabaseEvent>? _connectionSubscription;
+
   bool get _supported => defaultTargetPlatform == TargetPlatform.iOS;
 
   Future<void> initialize(BuildContext context) async {
@@ -62,6 +71,7 @@ class ThermostatGeofenceService extends ChangeNotifier
       _isInsideGeofence = prefs.getBool('isInsideGeofence') ?? true;
       _channel.setMethodCallHandler(_handleNativeEvent);
       _isInitialized = true;
+
       _authSubscription?.cancel();
       _authSubscription = FirebaseAuth.instance.authStateChanges().listen((
         user,
@@ -70,13 +80,29 @@ class ThermostatGeofenceService extends ChangeNotifier
           unawaited(stop());
         } else {
           unawaited(_syncNativePolicy());
+          unawaited(_processQueuedAutomationIfConnected());
         }
       });
+
+      // İnternet / Firebase bağlantısı geri geldiği an bekleyen konum komutunu işle
+      _connectionSubscription?.cancel();
+      _connectionSubscription = FirebaseDatabase.instance
+          .ref('.info/connected')
+          .onValue
+          .listen((event) {
+        final connected = event.snapshot.value == true;
+        _firebaseConnected = connected;
+        if (connected) {
+          unawaited(_processQueuedAutomationIfConnected());
+        }
+      });
+
       await _syncNativePolicy();
       _lastAutomationMessage = await _channel.invokeMethod<String>(
         'getLastAutomationResult',
       );
       await refreshDiagnostics();
+      await _processQueuedAutomationIfConnected();
       notifyListeners();
     } catch (_) {
       debugPrint('Konum otomasyonu başlatılamadı.');
@@ -91,6 +117,7 @@ class ThermostatGeofenceService extends ChangeNotifier
     if (onHomeLan) {
       _isInsideGeofence = true;
       await _saveState(true);
+      await _clearQueuedAction();
     }
     try {
       await _channel.invokeMethod('setLanHomeLock', {'onHomeLan': onHomeLan});
@@ -159,13 +186,17 @@ class ThermostatGeofenceService extends ChangeNotifier
         _isInsideGeofence = true;
         _settledNativeFailureSnapshot = null;
         await _saveState(true);
+        await _enqueuePendingAction(isOutside: false);
         await _updateDistance();
+        unawaited(_processQueuedAutomationIfConnected());
         break;
       case 'onExitRegion':
         _isInsideGeofence = false;
         _settledNativeFailureSnapshot = null;
         await _saveState(false);
+        await _enqueuePendingAction(isOutside: true);
         await _updateDistance();
+        unawaited(_processQueuedAutomationIfConnected());
         break;
       case 'onStateChanged':
         final args = call.arguments as Map?;
@@ -174,10 +205,12 @@ class ThermostatGeofenceService extends ChangeNotifier
           final nextInside = state == 'inside';
           if (nextInside != _isInsideGeofence) {
             _settledNativeFailureSnapshot = null;
+            await _enqueuePendingAction(isOutside: !nextInside);
           }
           _isInsideGeofence = nextInside;
           await _saveState(_isInsideGeofence);
           await _updateDistance();
+          unawaited(_processQueuedAutomationIfConnected());
         }
         break;
       case 'onDiagnosticsChanged':
@@ -189,7 +222,11 @@ class ThermostatGeofenceService extends ChangeNotifier
         _lastAutomationMessage = msg;
         if (_isUnverifiedFailureMessage(msg)) {
           _settledNativeFailureSnapshot = null;
-          unawaited(_retryFailedAutomationIfNeeded(force: true));
+          await _enqueuePendingAction(isOutside: !_isInsideGeofence);
+          unawaited(_processQueuedAutomationIfConnected(force: true));
+        } else if (msg != null && msg.isNotEmpty) {
+          // iOS tarafı başarıyla yazdıysa kuyruktaki yedek görevi temizle
+          await _clearQueuedAction();
         }
         await refreshDiagnostics();
         break;
@@ -204,37 +241,98 @@ class ThermostatGeofenceService extends ChangeNotifier
     return lower.contains('doğrulanamadı') ||
         lower.contains('dogrulanamadi') ||
         lower.contains('kontrol et') ||
-        lower.contains('hata');
+        lower.contains('hata') ||
+        lower.contains('internet bekleniyor');
   }
 
-  /// Wi-Fi -> 5G geçişinde iOS'un gönderemediği konum otomasyonunu
-  /// 3 saniye arayla 3 kez deneyerek tamamlar ve ekrandaki hatayı temizler.
-  Future<void> _retryFailedAutomationIfNeeded({bool force = false}) async {
+  Future<void> _enqueuePendingAction({required bool isOutside}) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final now = DateTime.now();
+      final payload = jsonEncode({
+        'isOutside': isOutside,
+        'queuedAtMs': now.millisecondsSinceEpoch,
+      });
+      await prefs.setString(_pendingQueuePrefKey, payload);
+      if (!_firebaseConnected) {
+        final hh = now.hour.toString().padLeft(2, '0');
+        final mm = now.minute.toString().padLeft(2, '0');
+        _lastAutomationMessage =
+            'İnternet bekleniyor · ${isOutside ? "Çıkış" : "Giriş"} komutu sıraya alındı ($hh:$mm)';
+        notifyListeners();
+      }
+    } catch (_) {}
+  }
+
+  Future<Map<String, dynamic>?> _readQueuedAction() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_pendingQueuePrefKey);
+      if (raw == null || raw.isEmpty) return null;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return null;
+      final map = Map<String, dynamic>.from(decoded);
+      final queuedAt = (map['queuedAtMs'] as num?)?.toInt() ?? 0;
+      final age = DateTime.now().millisecondsSinceEpoch - queuedAt;
+      if (age < 0 || age > _maxQueueAgeMs) {
+        await prefs.remove(_pendingQueuePrefKey);
+        return null;
+      }
+      return map;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _clearQueuedAction() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_pendingQueuePrefKey);
+    } catch (_) {}
+  }
+
+  /// İnternet kapalıyken sıraya alınan veya ağ geçişinde yarım kalan
+  /// konum otomasyonunu internet bağlandığı anda otomatik olarak işler.
+  Future<void> _processQueuedAutomationIfConnected({bool force = false}) async {
     if (_retryingFailedAutomation) return;
     final settings = _settingsProvider;
     final user = FirebaseAuth.instance.currentUser;
     if (settings == null || !settings.geofenceEnabled || user == null) return;
 
+    final queued = await _readQueuedAction();
     final currentMsg = _lastAutomationMessage;
-    if (!_isUnverifiedFailureMessage(currentMsg)) return;
-    if (!force &&
+    final hasFailureMsg = _isUnverifiedFailureMessage(currentMsg);
+
+    if (queued == null && !hasFailureMsg) return;
+    if (queued == null &&
+        !force &&
         _settledNativeFailureSnapshot != null &&
         _settledNativeFailureSnapshot == currentMsg) {
+      return;
+    }
+
+    final bool isOutside = queued != null
+        ? (queued['isOutside'] == true)
+        : !_isInsideGeofence;
+
+    if (!_firebaseConnected) {
+      final hh = DateTime.now().hour.toString().padLeft(2, '0');
+      final mm = DateTime.now().minute.toString().padLeft(2, '0');
+      _lastAutomationMessage =
+          'İnternet bekleniyor · ${isOutside ? "Çıkış" : "Giriş"} komutu internet açılınca işlenecek ($hh:$mm)';
+      notifyListeners();
       return;
     }
 
     _retryingFailedAutomation = true;
     try {
       await settings.ready;
-      final isOutside = !_isInsideGeofence;
 
       for (int attempt = 1; attempt <= 3; attempt++) {
         if (attempt > 1 || force) {
-          // Wi-Fi -> Hücresel veri (5G) geçişinin oturması için kısa bekleme
-          await Future<void>.delayed(Duration(seconds: attempt == 1 ? 2 : 3));
+          await Future<void>.delayed(Duration(seconds: attempt == 1 ? 1 : 3));
         }
         try {
-          // Token'ı ve sunucu zaman farkını doğrula
           await user.getIdToken();
           int serverOffset = 0;
           try {
@@ -252,7 +350,6 @@ class ThermostatGeofenceService extends ChangeNotifier
           final homeRef = FirebaseDatabase.instance.ref('wizHomes/$uid');
 
           if (isOutside) {
-            // Dışarı çıkıldı: Seçili çıkış ışıklarını ve kombiyi kapat
             for (final lightId in settings.exitLightIds) {
               final cmdRef = homeRef.child('commands/$lightId');
               final cmdId = cmdRef.push().key!;
@@ -275,7 +372,6 @@ class ThermostatGeofenceService extends ChangeNotifier
                   .timeout(const Duration(seconds: 6));
             }
           } else {
-            // Eve girildi: Seçili giriş ışıklarını ve kombiyi aç
             for (final lightId in settings.entryLightIds) {
               final cmdRef = homeRef.child('commands/$lightId');
               final cmdId = cmdRef.push().key!;
@@ -298,6 +394,7 @@ class ThermostatGeofenceService extends ChangeNotifier
             }
           }
 
+          await _clearQueuedAction();
           final hh = DateTime.now().hour.toString().padLeft(2, '0');
           final mm = DateTime.now().minute.toString().padLeft(2, '0');
           _settledNativeFailureSnapshot = currentMsg;
@@ -306,7 +403,7 @@ class ThermostatGeofenceService extends ChangeNotifier
           notifyListeners();
           return;
         } catch (e) {
-          debugPrint('[GeofenceRetry] Deneme $attempt başarısız: $e');
+          debugPrint('[GeofenceOfflineQueue] Deneme $attempt başarısız: $e');
         }
       }
     } finally {
@@ -345,12 +442,20 @@ class ThermostatGeofenceService extends ChangeNotifier
             _lastAutomationMessage != null &&
             !_isUnverifiedFailureMessage(_lastAutomationMessage)) {
           // Daha önce kurtardığımız hata mesajının tekrar üstüne yazılmasını engelle
-        } else {
+        } else if (nativeMsg != null && nativeMsg.isNotEmpty) {
           _lastAutomationMessage = nativeMsg;
         }
+
         if (_isUnverifiedFailureMessage(_lastAutomationMessage)) {
-          unawaited(_retryFailedAutomationIfNeeded());
+          final existing = await _readQueuedAction();
+          if (existing == null) {
+            await _enqueuePendingAction(isOutside: !_isInsideGeofence);
+          }
+          unawaited(_processQueuedAutomationIfConnected());
+        } else {
+          unawaited(_processQueuedAutomationIfConnected());
         }
+
         final sampledAt = _diagnostics!.sampledAt;
         if (_diagnostics!.enabled &&
             _diagnostics!.distance != null &&
@@ -372,7 +477,10 @@ class ThermostatGeofenceService extends ChangeNotifier
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) unawaited(refreshDiagnostics());
+    if (state == AppLifecycleState.resumed) {
+      unawaited(refreshDiagnostics());
+      unawaited(_processQueuedAutomationIfConnected());
+    }
   }
 
   Future<void> updateGeofence(BuildContext context) async {
@@ -429,9 +537,12 @@ class ThermostatGeofenceService extends ChangeNotifier
     unawaited(stop());
     _authSubscription?.cancel();
     _authSubscription = null;
+    _connectionSubscription?.cancel();
+    _connectionSubscription = null;
     _isInitialized = false;
     _isInsideGeofence = true;
     _lanHomeLock = false;
+    _firebaseConnected = false;
     _diagnostics = null;
     _lastAutomationMessage = null;
     _settledNativeFailureSnapshot = null;

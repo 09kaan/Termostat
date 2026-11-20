@@ -10,6 +10,7 @@ import '../providers/thermostat_provider.dart';
 import '../models/heating_feedback.dart';
 import '../widgets/room_overview.dart';
 import '../widgets/bedroom_3d_card.dart';
+import '../widgets/salon_room_view.dart';
 import '../widgets/home_floor_plan.dart';
 import '../widgets/home_pager.dart';
 import '../models/home_plan.dart';
@@ -122,12 +123,11 @@ class WizLightsScreenState extends State<WizLightsScreen> {
       _savingPlan = false;
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && binding == _binding)
+      if (mounted && binding == _binding) {
         const RoomDetailNotification(false).dispatch(context);
+      }
     });
     if (user != null) _loadPlan(user.uid, binding);
-    // Native Firebase onValue is a single-subscription stream. Subscribe ONCE
-    // and share the last snapshot with the room and any number of panels.
     _homeSubscription = _home?.onValue.listen(
       (event) {
         if (!mounted || binding != _binding) return;
@@ -185,11 +185,13 @@ class WizLightsScreenState extends State<WizLightsScreen> {
       if (!mounted || generation != _binding || _owner != owner) return;
       _refresh(() => _bindings = next);
     } catch (_) {
-      if (mounted && generation == _binding)
+      if (mounted && generation == _binding) {
         _message('Eşleştirme kaydedilemedi. Tekrar dene.');
+      }
     } finally {
-      if (mounted && generation == _binding)
+      if (mounted && generation == _binding) {
         _refresh(() => _savingPlan = false);
+      }
     }
   }
 
@@ -296,16 +298,18 @@ class WizLightsScreenState extends State<WizLightsScreen> {
       });
     } catch (e) {
       if (mounted && generation == _binding) _autoRetries.remove(id);
-      if (mounted && generation == _binding)
+      if (mounted && generation == _binding) {
         _message(
           'Komut gönderilemedi ($e). İnterneti ve Firebase izinlerini kontrol et.',
         );
+      }
     } finally {
-      if (mounted && generation == _binding)
+      if (mounted && generation == _binding) {
         _refresh(() {
           _sending.remove(id);
           _writeStarted.remove(id);
         });
+      }
     }
   }
 
@@ -337,7 +341,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
                     maxLength: 40,
                     decoration: const InputDecoration(
                       labelText: 'Ad',
-                      hintText: 'Salon',
+                      hintText: 'Salon Çubuk LED',
                     ),
                   ),
                   TextField(
@@ -345,12 +349,12 @@ class WizLightsScreenState extends State<WizLightsScreen> {
                     keyboardType: TextInputType.number,
                     decoration: const InputDecoration(
                       labelText: 'Ampulün yerel IP adresi',
-                      hintText: '192.168.1.50',
+                      hintText: '192.168.1.50 veya 0.0.0.1 (BLE)',
                     ),
                   ),
                   const SizedBox(height: 12),
                   const Text(
-                    'IP adresini WiZ cihaz bilgilerinden veya modemden bul. Modemde bu IP için DHCP rezervasyonu önerilir.',
+                    'WiZ ampulün yerel IP adresini veya BLE şerit LED için 0.0.0.1 yaz.',
                   ),
                   if (error != null)
                     Text(error!, style: const TextStyle(color: Colors.red)),
@@ -387,7 +391,6 @@ class WizLightsScreenState extends State<WizLightsScreen> {
         ),
       );
     } finally {
-      // Let the dialog route finish its dismissal animation before disposal.
       Future<void>.delayed(const Duration(milliseconds: 400), () {
         name.dispose();
         ip.dispose();
@@ -405,8 +408,9 @@ class WizLightsScreenState extends State<WizLightsScreen> {
         if (current != null) return Transaction.abort();
         return Transaction.success(result);
       }, applyLocally: false);
-      if (!saved.committed)
+      if (!saved.committed) {
         _message('Bu alan başka cihazdan dolduruldu. Tekrar dene.');
+      }
     } catch (_) {
       _message('Ampul eklenemedi. Firebase izinlerini kontrol et.');
     }
@@ -441,7 +445,6 @@ class WizLightsScreenState extends State<WizLightsScreen> {
     }
   }
 
-  /// The shared main header calls this; no setup clutter stays on the room.
   void openRooms() {
     showModalBottomSheet<void>(
       context: context,
@@ -540,8 +543,9 @@ class WizLightsScreenState extends State<WizLightsScreen> {
       bool bridgeOnline,
     ) content,
   ) {
-    if (_home == null)
+    if (_home == null) {
       return const Center(child: Text('Önce uygulamada giriş yap.'));
+    }
     if (_dataError) {
       return Center(
         child: Padding(
@@ -767,7 +771,6 @@ class WizLightsScreenState extends State<WizLightsScreen> {
         now: _now,
         reportIsCurrent: current,
       )) continue;
-      // Spend the budget BEFORE asynchronous work, including failures/aborts.
       attempt.consumed = true;
       _refresh(() {
         _sending.add(id);
@@ -874,7 +877,8 @@ class WizLightsScreenState extends State<WizLightsScreen> {
     final config = _map(lights[id]);
     final report = _map(_map(status['lights'])[id]);
     final command = _map(_map(_homeData['commands'])[id]);
-    final current = _connected && bridgeOnline && _lightReportFresh(report, config);
+    final current =
+        _connected && bridgeOnline && _lightReportFresh(report, config);
     final feedback = _commandFeedback(id, command, report, current);
     if (config.isEmpty ||
         !_connected ||
@@ -909,12 +913,12 @@ class WizLightsScreenState extends State<WizLightsScreen> {
       pending: pending,
       retryable: feedback.retryable,
       feedback: feedback.message,
-      controllable: !_dataError && _connected && bridgeOnline && !_sending.contains(id),
+      controllable:
+          !_dataError && _connected && bridgeOnline && !_sending.contains(id),
     );
   }
 
   void _togglePlanFixture(String fixture) {
-    // Re-read the current report/time at tap, not a possibly stale paint frame.
     final lights = _map(_map(_homeData['config'])['lights']);
     final status = _map(_homeData['status']);
     final bridgeMap = _map(status['bridge']);
@@ -947,6 +951,110 @@ class WizLightsScreenState extends State<WizLightsScreen> {
     return rId.contains('bed') ||
         rId.contains('yatak') ||
         rName.contains('yatak');
+  }
+
+  bool _isSalonRoom(String rIdStr, String rNameStr) {
+    final rId = rIdStr.toLowerCase();
+    final rName = rNameStr.toLowerCase();
+    return rId == 'living' || rId.contains('salon') || rName.contains('salon');
+  }
+
+  Color? _resolveLightColor(Map<String, dynamic> report) {
+    final r = report['r'], g = report['g'], b = report['b'];
+    if (r is num && g is num && b is num) {
+      return Color.fromARGB(
+        255,
+        r.round().clamp(0, 255),
+        g.round().clamp(0, 255),
+        b.round().clamp(0, 255),
+      );
+    }
+    final temp = report['temp'];
+    if (temp is num) {
+      if (temp <= 3200) return const Color(0xFFFFB866);
+      if (temp >= 5500) return const Color(0xFFD6E8FF);
+      return const Color(0xFFFFF0D4);
+    }
+    return null;
+  }
+
+  Widget _buildSalonOverview({
+    required String roomId,
+    required Map<String, FixtureState> states,
+    required Map<String, dynamic> lights,
+    required Map<String, dynamic> reported,
+  }) {
+    final roomFixtures = HomePlan.fixturesFor(roomId);
+    final ceilingFixture = roomFixtures.where((f) => !f.floor).firstOrNull;
+    final floorFixture = roomFixtures.where((f) => f.floor).firstOrNull;
+
+    final floorState = floorFixture != null
+        ? (states[floorFixture.id] ?? const FixtureState())
+        : const FixtureState();
+    final floorBulbId = floorFixture == null
+        ? null
+        : HomePlanPreferences.resolve(floorFixture.id, _bindings, lights);
+    final floorReport =
+        floorBulbId != null ? _map(reported[floorBulbId]) : <String, dynamic>{};
+
+    final ceilingState = ceilingFixture != null
+        ? (states[ceilingFixture.id] ?? const FixtureState())
+        : const FixtureState();
+    final ceilingBulbId = ceilingFixture == null
+        ? null
+        : HomePlanPreferences.resolve(ceilingFixture.id, _bindings, lights);
+
+    final sortedIds = lights.keys.toList()..sort();
+    final selectableBulbs = <SelectableSalonBulb>[
+      for (final lightId in sortedIds)
+        SelectableSalonBulb(
+          id: lightId,
+          name: '${_map(lights[lightId])['name'] ?? lightId} ($lightId)',
+          ip: _map(lights[lightId])['ip']?.toString(),
+        ),
+    ];
+
+    final dimming = floorReport['dimming'] is num
+        ? (floorReport['dimming'] as num).round().clamp(10, 100)
+        : 85;
+
+    return SalonRoomView(
+      floorLampOn: floorState.on,
+      floorLampPending: floorState.pending,
+      floorLampRetryable: floorState.retryable,
+      floorLampControllable: floorBulbId != null && floorState.controllable,
+      floorLampFeedback: floorState.feedback,
+      floorLampName: floorBulbId == null
+          ? null
+          : (_map(lights[floorBulbId])['name'] as String? ?? 'Çubuk LED'),
+      floorLampDimming: dimming,
+      floorLampColor: _resolveLightColor(floorReport),
+      ceilingLampOn: ceilingState.on,
+      ceilingLampName: ceilingBulbId == null
+          ? null
+          : (_map(lights[ceilingBulbId])['name'] as String? ?? 'Tavan'),
+      ceilingLampControllable:
+          ceilingBulbId != null && ceilingState.controllable,
+      availableBulbs: selectableBulbs,
+      selectedFloorBulbId: floorBulbId,
+      onToggleFloorLamp: floorFixture != null && floorBulbId != null
+          ? () => _togglePlanFixture(floorFixture.id)
+          : null,
+      onToggleCeilingLamp: ceilingFixture != null && ceilingBulbId != null
+          ? () => _togglePlanFixture(ceilingFixture.id)
+          : null,
+      onChangeBrightness: floorBulbId != null
+          ? (value) => _send(floorBulbId, {'state': true, 'dimming': value})
+          : null,
+      onChangeColor: floorBulbId != null
+          ? (colorParams) => _send(floorBulbId, {'state': true, ...colorParams})
+          : null,
+      onAssignFloorBulb: floorFixture != null
+          ? (bulbId) => _assignFixture(floorFixture.id, bulbId)
+          : null,
+      onOpenFullControls:
+          floorBulbId != null ? () => _openControls(floorBulbId) : null,
+    );
   }
 
   Widget _buildBedroom3DOverview({
@@ -1062,7 +1170,6 @@ class WizLightsScreenState extends State<WizLightsScreen> {
           ),
         ],
         const SizedBox(height: 14),
-        // Boş izometrik ? kutusunun yerini alan 3B Yatak Odası Kartı
         Bedroom3DCard(
           height: 340,
           isHeating: isHeating,
@@ -1166,6 +1273,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
         f.id: _fixtureState(f.id, lights, reported, commands, bridgeOnline),
     };
     final thermostat = context.watch<ThermostatProvider>();
+    bool allowSwipeBack = false;
     Widget child;
     if (roomId == null) {
       child = HomeFloorPlan(
@@ -1193,24 +1301,24 @@ class WizLightsScreenState extends State<WizLightsScreen> {
           ? null
           : HomePlanPreferences.resolve(fixture, _bindings, lights);
       final state = states[fixture] ?? const FixtureState();
-      final enabled = id != null &&
-          state.controllable &&
-          _connected &&
-          bridgeOnline;
+      final enabled =
+          id != null && state.controllable && _connected && bridgeOnline;
       final sensor = thermostat.thermostat;
       final hasReading = room.sensor &&
           sensor != null &&
           !thermostat.isLoading &&
           thermostat.error == null;
       final isBedroom = _isBedroomRoom(room.id, room.name);
+      final isSalon = _isSalonRoom(room.id, room.name);
       final isHeating = thermostat.heatingFeedback.relay == RelayState.on;
+      allowSwipeBack = !isBedroom && !isSalon;
 
       child = Column(
         key: ValueKey('detail-$roomId'),
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(12, 4, 16, 0),
+            padding: const EdgeInsets.fromLTRB(12, 2, 16, 2),
             child: Wrap(
               crossAxisAlignment: WrapCrossAlignment.center,
               spacing: 12,
@@ -1225,7 +1333,7 @@ class WizLightsScreenState extends State<WizLightsScreen> {
               ],
             ),
           ),
-          if (fixtures.length > 1)
+          if (!isSalon && fixtures.length > 1)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Wrap(
@@ -1247,64 +1355,71 @@ class WizLightsScreenState extends State<WizLightsScreen> {
               ),
             ),
           Expanded(
-            child: isBedroom
-                ? _buildBedroom3DOverview(
+            child: isSalon
+                ? _buildSalonOverview(
                     roomId: room.id,
-                    roomName: room.name,
-                    dimensions: room.dimensions,
-                    area: room.area,
-                    hasSensor: room.sensor,
-                    selectedType: selected?.type,
-                    fixture: fixture,
-                    id: id,
-                    state: state,
                     states: states,
-                    enabled: enabled,
                     lights: lights,
-                    hasReading: hasReading,
-                    temperature:
-                        hasReading && sensor.currentTemperature.isFinite
-                            ? sensor.currentTemperature
-                            : null,
-                    humidity: hasReading && sensor.humidity.isFinite
-                        ? sensor.humidity
-                        : null,
-                    isHeating: isHeating,
+                    reported: reported,
                   )
-                : RoomOverview(
-                    roomName: room.name,
-                    dimensions: room.dimensions,
-                    area: room.area,
-                    roomWidth: room.width,
-                    roomDepth: room.depth,
-                    showSensor: room.sensor,
-                    showLamp: id != null,
-                    planAspect: room.width == null || room.depth == null
-                        ? room.bounds.width / room.bounds.height
-                        : null,
-                    floorLamp: selected?.floor ?? false,
-                    isLightOn: state.on,
-                    ambientOn: fixtures.any((f) => states[f.id]?.on == true)
-                        ? true
-                        : state.on,
-                    pending: state.pending,
-                    commandFeedback: state.feedback,
-                    retryCommand: state.retryable,
-                    lightName: id == null
-                        ? null
-                        : '${_map(lights[id])['name'] ?? 'Ampul'} · ${selected?.type ?? ''}',
-                    onToggle:
-                        enabled ? () => _togglePlanFixture(fixture!) : null,
-                    onControls: id == null ? null : () => _openControls(id),
-                    onSetup: openSettings,
-                    temperature:
-                        hasReading && sensor.currentTemperature.isFinite
-                            ? sensor.currentTemperature
+                : isBedroom
+                    ? _buildBedroom3DOverview(
+                        roomId: room.id,
+                        roomName: room.name,
+                        dimensions: room.dimensions,
+                        area: room.area,
+                        hasSensor: room.sensor,
+                        selectedType: selected?.type,
+                        fixture: fixture,
+                        id: id,
+                        state: state,
+                        states: states,
+                        enabled: enabled,
+                        lights: lights,
+                        hasReading: hasReading,
+                        temperature:
+                            hasReading && sensor.currentTemperature.isFinite
+                                ? sensor.currentTemperature
+                                : null,
+                        humidity: hasReading && sensor.humidity.isFinite
+                            ? sensor.humidity
                             : null,
-                    humidity: hasReading && sensor.humidity.isFinite
-                        ? sensor.humidity
-                        : null,
-                  ),
+                        isHeating: isHeating,
+                      )
+                    : RoomOverview(
+                        roomName: room.name,
+                        dimensions: room.dimensions,
+                        area: room.area,
+                        roomWidth: room.width,
+                        roomDepth: room.depth,
+                        showSensor: room.sensor,
+                        showLamp: id != null,
+                        planAspect: room.width == null || room.depth == null
+                            ? room.bounds.width / room.bounds.height
+                            : null,
+                        floorLamp: selected?.floor ?? false,
+                        isLightOn: state.on,
+                        ambientOn: fixtures.any((f) => states[f.id]?.on == true)
+                            ? true
+                            : state.on,
+                        pending: state.pending,
+                        commandFeedback: state.feedback,
+                        retryCommand: state.retryable,
+                        lightName: id == null
+                            ? null
+                            : '${_map(lights[id])['name'] ?? 'Ampul'} · ${selected?.type ?? ''}',
+                        onToggle:
+                            enabled ? () => _togglePlanFixture(fixture!) : null,
+                        onControls: id == null ? null : () => _openControls(id),
+                        onSetup: openSettings,
+                        temperature:
+                            hasReading && sensor.currentTemperature.isFinite
+                                ? sensor.currentTemperature
+                                : null,
+                        humidity: hasReading && sensor.humidity.isFinite
+                            ? sensor.humidity
+                            : null,
+                      ),
           ),
         ],
       );
@@ -1319,15 +1434,16 @@ class WizLightsScreenState extends State<WizLightsScreen> {
         key: const ValueKey('room-swipe-back'),
         behavior: HitTestBehavior.translucent,
         onHorizontalDragStart:
-            roomId != null && ! _selectedRoom.toString().toLowerCase().contains('bed') && ! _selectedRoom.toString().toLowerCase().contains('yatak') && active ? (_) => _roomDrag = 0 : null,
+            allowSwipeBack && active ? (_) => _roomDrag = 0 : null,
         onHorizontalDragUpdate:
-            roomId != null && ! _selectedRoom.toString().toLowerCase().contains('bed') && ! _selectedRoom.toString().toLowerCase().contains('yatak') && active ? (d) => _roomDrag += d.delta.dx : null,
+            allowSwipeBack && active ? (d) => _roomDrag += d.delta.dx : null,
         onHorizontalDragCancel:
-            roomId != null && ! _selectedRoom.toString().toLowerCase().contains('bed') && ! _selectedRoom.toString().toLowerCase().contains('yatak') && active ? () => _roomDrag = 0 : null,
-        onHorizontalDragEnd: roomId != null && ! _selectedRoom.toString().toLowerCase().contains('bed') && ! _selectedRoom.toString().toLowerCase().contains('yatak') && active
+            allowSwipeBack && active ? () => _roomDrag = 0 : null,
+        onHorizontalDragEnd: allowSwipeBack && active
             ? (d) {
-                if (_roomDrag > 48 || (d.primaryVelocity ?? 0) > 250)
+                if (_roomDrag > 48 || (d.primaryVelocity ?? 0) > 250) {
                   _leaveRoom();
+                }
                 _roomDrag = 0;
               }
             : null,
@@ -1335,7 +1451,6 @@ class WizLightsScreenState extends State<WizLightsScreen> {
           key: const ValueKey('room-transition'),
           duration: Duration(milliseconds: reduced ? 0 : 240),
           reverseDuration: Duration(milliseconds: reduced ? 0 : 160),
-          // Do not keep a second interactive old room alive during the transition.
           layoutBuilder: (current, previous) => current ?? const SizedBox(),
           transitionBuilder: (child, animation) => FadeTransition(
             opacity: animation,
@@ -1371,10 +1486,8 @@ class WizLightsScreenState extends State<WizLightsScreen> {
                     ? 'Ampul bildirimi: Açık'
                     : 'Ampul bildirimi: Kapalı')
                 : 'Durum bilinmiyor');
-    final enabled = !_dataError &&
-        _connected &&
-        bridgeOnline &&
-        !_sending.contains(id);
+    final enabled =
+        !_dataError && _connected && bridgeOnline && !_sending.contains(id);
     final brightness = report['dimming'] is num
         ? (report['dimming'] as num).toDouble().clamp(10.0, 100.0).toDouble()
         : 50.0;

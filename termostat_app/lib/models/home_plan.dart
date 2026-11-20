@@ -80,6 +80,9 @@ class HomePlan {
         floor: true),
     PlanFixture(
         'living_ceiling', 'living', 'Salon · Tavan', Offset(422.5, 140)),
+    PlanFixture('living_floor', 'living', 'Salon · Çubuk LED Lambader',
+        Offset(312, 140),
+        floor: true),
     PlanFixture(
         'kitchen_ceiling', 'kitchen', 'Mutfak · Tavan', Offset(117, 340)),
     PlanFixture(
